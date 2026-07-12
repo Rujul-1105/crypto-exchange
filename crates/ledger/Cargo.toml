@@ -1,0 +1,15 @@
+[package]
+name = "ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Phase 0 stub. The real deps (sqlx, postgres) arrive in Phase 3.
+# Keep this crate dep-light for now so the workspace compiles cleanly.
+[dependencies]
+common = { path = "../common" }

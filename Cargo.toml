@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/matching-engine",
+    "crates/ledger",
+    "crates/api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Workspace-wide lints. The matching engine and ledger touch money, so we
+# forbid unsafe code at the workspace level. Individual crates can opt out
+# of specific lints by overriding [lints] in their own Cargo.toml if a real
+# need arises, but the default is strict.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

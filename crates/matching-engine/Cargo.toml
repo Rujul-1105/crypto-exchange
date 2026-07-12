@@ -1,0 +1,18 @@
+[package]
+name = "matching-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# CRITICAL: this crate MUST stay free of async / db / web dependencies so
+# that it remains a pure library usable from a plain `#[test]` with no
+# runtime. If you find yourself wanting to add tokio, sqlx, axum, hyper,
+# async-trait, etc. here, STOP. The correct home for those is the api or
+# ledger crates; this crate stays a deterministic, dependency-light core.
+[dependencies]
+common = { path = "../common" }
