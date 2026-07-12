@@ -16,3 +16,11 @@ workspace = true
 # ledger crates; this crate stays a deterministic, dependency-light core.
 [dependencies]
 common = { path = "../common" }
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "throughput"
+harness = false

@@ -4,11 +4,12 @@
 //! be used from every other crate (matching-engine, ledger, api) without
 //! dragging in any runtime, database, or web concerns.
 //!
-//! Phase 0 only defines the type skeletons. Semantic meaning (price
-//! representation, order kinds, timestamps) is locked in here so that later
-//! phases can build on a stable foundation.
+//! Phase 0 defined the type skeletons. Phase 1 adds [`Order`] — the core
+//! order struct used by the matching engine, and (later) by the ledger and
+//! API layers.
 
 use std::fmt;
+use std::ops::{Add, Sub};
 
 /// A unique identifier for an order.
 ///
@@ -32,6 +33,16 @@ pub struct TradeId(pub u64);
 pub enum Side {
     Buy,
     Sell,
+}
+
+impl Side {
+    /// The opposite side.
+    pub fn opposite(self) -> Self {
+        match self {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        }
+    }
 }
 
 /// Order kind. Market orders sweep the book until filled or exhausted;
@@ -79,8 +90,30 @@ pub struct Price(pub u64);
 ///
 /// Same rationale as [`Price`]: integer-only arithmetic throughout the
 /// engine keeps fill math exact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Qty(pub u64);
+
+impl Add for Qty {
+    type Output = Qty;
+    fn add(self, rhs: Qty) -> Qty {
+        Qty(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Qty {
+    type Output = Qty;
+    fn sub(self, rhs: Qty) -> Qty {
+        Qty(self.0 - rhs.0)
+    }
+}
+
+impl Qty {
+    pub const ZERO: Qty = Qty(0);
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+}
 
 /// Monotonic timestamp in nanoseconds since process start.
 ///
@@ -88,6 +121,60 @@ pub struct Qty(pub u64);
 /// own time for price-time priority and inject this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Timestamp(pub u64);
+
+/// A resting or incoming order on the matching engine.
+///
+/// `qty` is the **remaining** quantity, not the original placement size.
+/// The matching engine decrements it as fills occur. To recover the original
+/// placement size, sum `qty` plus the trade qtys attributed to this order.
+///
+/// `price` is `Some(_)` for limit orders and `None` for market orders.
+/// The matching engine validates this pairing in `submit_*` and rejects
+/// mismatches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Order {
+    pub id: OrderId,
+    pub side: Side,
+    pub price: Option<Price>,
+    pub qty: Qty,
+    pub timestamp: Timestamp,
+    pub kind: OrderKind,
+}
+
+impl Order {
+    /// Construct a limit order. Engine-side validation is the source of
+    /// truth for `qty > 0`; this constructor just builds the struct with
+    /// the kind/price pairing locked in.
+    pub fn limit(
+        id: OrderId,
+        side: Side,
+        price: Price,
+        qty: Qty,
+        timestamp: Timestamp,
+    ) -> Self {
+        Order {
+            id,
+            side,
+            price: Some(price),
+            qty,
+            timestamp,
+            kind: OrderKind::Limit,
+        }
+    }
+
+    /// Construct a market order. Engine-side validation is the source of
+    /// truth for `qty > 0`.
+    pub fn market(id: OrderId, side: Side, qty: Qty, timestamp: Timestamp) -> Self {
+        Order {
+            id,
+            side,
+            price: None,
+            qty,
+            timestamp,
+            kind: OrderKind::Market,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -105,6 +192,8 @@ mod tests {
 
         assert_eq!(Side::Buy, Side::Buy);
         assert_ne!(Side::Buy, Side::Sell);
+        assert_eq!(Side::Buy.opposite(), Side::Sell);
+        assert_eq!(Side::Sell.opposite(), Side::Buy);
 
         assert_eq!(OrderKind::Limit, OrderKind::Limit);
         assert_ne!(OrderKind::Limit, OrderKind::Market);
@@ -118,5 +207,24 @@ mod tests {
         assert!(Price(100) < Price(200));
         assert!(Qty(1) < Qty(2));
         assert!(Timestamp(1) < Timestamp(2));
+    }
+
+    #[test]
+    fn qty_arithmetic() {
+        assert_eq!(Qty(3) + Qty(4), Qty(7));
+        assert_eq!(Qty(10) - Qty(3), Qty(7));
+        assert!(Qty::ZERO.is_zero());
+        assert!(!Qty(1).is_zero());
+    }
+
+    #[test]
+    fn order_constructors_set_kind_and_price() {
+        let lim = Order::limit(OrderId(1), Side::Buy, Price(100), Qty(5), Timestamp(0));
+        assert_eq!(lim.kind, OrderKind::Limit);
+        assert_eq!(lim.price, Some(Price(100)));
+
+        let mkt = Order::market(OrderId(2), Side::Sell, Qty(5), Timestamp(0));
+        assert_eq!(mkt.kind, OrderKind::Market);
+        assert_eq!(mkt.price, None);
     }
 }
