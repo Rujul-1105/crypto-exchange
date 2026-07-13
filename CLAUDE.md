@@ -165,6 +165,35 @@ Phase 5 server. README points at the frontend; this section exists.
 
 ---
 
+## Phase 4 — Auth & RBAC
+
+**Goal:** standard, low-risk web auth. Do not over-invest time here relative to Phase 1/3.
+
+- [x] Argon2 password hashing, JWT-based session auth (HS256)
+- [x] Roles: `user`, `market_maker`, `admin` — enforced via a single `require_role` check at the top of every protected handler
+- [x] Admin-only endpoints: manual balance adjustment (for demo/testing), symbol management
+
+**Exit criteria:** auth middleware has tests for each role's access boundaries (403 on unauthorized role, 200 on authorized). ✅
+
+See `crates/api/PHASE4_RESULTS.md` for the test counts, the role-enforcement design, and what's deliberately left for Phase 5.
+
+---
+
+## Phase 5 — REST API & Persistence Integration
+
+**Goal:** wire the already-tested engine, ledger, and auth together. This phase should feel like plumbing, not discovery — if you're debugging matching logic here, Phase 1 wasn't actually done.
+
+- [x] Axum REST API: place order, cancel order, get book snapshot, get balances, register/login, admin endpoints
+- [x] Idempotency keys on order submission (dedupe retried requests; in-memory cache keyed on `(user_id, key)`)
+- [x] Per-user rate limiting (token bucket, in-memory)
+- [x] Event log / WAL for the in-memory book (JSONL; persisted to file; replay at startup)
+
+**Exit criteria:** end-to-end test submitting orders via HTTP, confirming trade execution + balance updates, restarting the process, and confirming book state recovers from the event log. ✅
+
+See `crates/api/PHASE5_RESULTS.md` for the architecture, route table, end-to-end test, and what Phase 6+ should widen (notably: extending the WAL to record ledger mutations so admin credits survive replay).
+
+---
+
 ## Working agreement for Claude Code sessions
 
 1. Always state which phase we're in at the start of a session.

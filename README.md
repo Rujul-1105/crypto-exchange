@@ -59,8 +59,8 @@ cargo bench -p matching-engine    # Phase 1+
 - **Phase 0 — Scope Lock & Repo Setup** ✅
 - **Phase 1 — Order Book Core** ✅
 - **Phase 2 — Concurrency Layer** ✅
-- Phase 3 — Ledger (Double-Entry, Atomic Settlement)
-- Phase 4 — Auth & RBAC
-- Phase 5 — REST API & Persistence Integration
+- **Phase 3 — Ledger (Double-Entry, Atomic Settlement)** ✅
+- **Phase 4 — Auth & RBAC** ✅
+- **Phase 5 — REST API & Persistence Integration** ✅
 - Phase 6 — Hardening & Writeup
 - Phase 7 — Frontend (Next.js SPA) — planned, docs only

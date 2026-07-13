@@ -1,45 +1,32 @@
 //! HTTP API surface for the exchange.
 //!
-//! ## Phase 0 status
+//! ## Phase 4 — Auth & RBAC
 //!
-//! Workspace-member stub. The real implementation is layered across two
-//! phases:
+//! Auth primitives (Argon2id password hashing, JWT HS256), role enum,
+//! user store, and auth-aware handlers. Every admin-only handler calls
+//! `AuthContext::require_role(Role::Admin)` as its first action.
 //!
-//! - **Phase 4 — Auth & RBAC**: Argon2 password hashing, JWT sessions,
-//!   role-based middleware (`user`, `market_maker`, `admin`). Admin-only
-//!   endpoints for manual balance adjustment and symbol management.
-//! - **Phase 5 — REST & persistence integration**: Axum REST endpoints
-//!   (place order, cancel, book snapshot, balances, trade history),
-//!   idempotency keys on order submission, per-user rate limiting, and the
-//!   event log / WAL that the in-memory book replays on restart to
-//!   reconstruct state.
+//! ## Phase 5 — REST API & Persistence Integration
 //!
-//! Resist the temptation to start writing handlers in this crate during
-//! Phase 1 / 2 / 3. The matching engine and ledger need to be correct in
-//! isolation first; the API is plumbing on top of correct pieces.
+//! The `http` module owns the axum router, `AuthContext` extractor,
+//! JSON response types, and the binary entry point.
+//! `service` provides the `OrderService` that orchestrates
+//! ledger-lock → actor-submit → ledger-settle → WAL-append.
+//! `wal` provides the JSONL WAL with file persistence and replay.
+//! `idempotency` and `ratelimit` are in-memory helpers.
 
-/// Placeholder for Phase 0. Real handlers arrive in Phase 4 / 5.
-#[derive(Debug, Clone, Copy)]
-pub struct Api;
+pub mod auth;
+pub mod error;
+pub mod handlers;
+pub mod http;
+pub mod idempotency;
+pub mod ratelimit;
+pub mod service;
+pub mod wal;
 
-impl Api {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for Api {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn api_constructs() {
-        let _api = Api::new();
-    }
-}
+pub use auth::{
+    hash_password, issue_token, verify_password, verify_token, AuthContext, AuthError, InMemoryUserStore,
+    PasswordHash, Role, TokenClaims, User, UserStore,
+};
+pub use error::ApiError;
+pub use service::{OrderService, ServiceError, SubmitResult};
