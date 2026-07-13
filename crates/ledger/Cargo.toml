@@ -9,7 +9,27 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Phase 0 stub. The real deps (sqlx, postgres) arrive in Phase 3.
-# Keep this crate dep-light for now so the workspace compiles cleanly.
 [dependencies]
 common = { path = "../common" }
+thiserror = "1"
+
+# PostgresLedger is a stub in Phase 3 — the schema is defined in
+# migrations/20240101000000_initial.sql and the integration lands in a
+# follow-up phase that adds docker-based CI. We declare sqlx as an
+# optional dependency so it's there when needed without forcing it on
+# the in-memory build.
+sqlx = { version = "0.7", optional = true, default-features = false, features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+] }
+
+[features]
+default = []
+postgres = ["dep:sqlx"]
+
+
+[dev-dependencies]
+common = { path = "../common" }
+matching-engine = { path = "../matching-engine" }

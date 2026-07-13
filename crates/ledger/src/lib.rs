@@ -1,45 +1,93 @@
 //! Double-entry ledger with atomic settlement.
 //!
-//! ## Phase 0 status
+//! ## Phase 3 scope
 //!
-//! Workspace-member stub. The real implementation arrives in Phase 3, at
-//! which point this crate gains:
+//! Account model: `available_balance` + `locked_balance` per
+//! `(user, asset)`. Place locks funds (available → locked). Settle moves
+//! locked → available (or out) atomically across both sides of a trade.
 //!
-//! - `available_balance` and `locked_balance` per (user, asset)
-//! - Lock-on-place semantics so order placement moves available → locked
-//!   before the order reaches the matching engine
-//! - Postgres schema for `accounts`, `ledger_entries` (append-only),
-//!   `orders`, `trades`
-//! - Atomic settlement: debit/credit both sides, mark order status, insert
-//!   trade record, insert ledger entries — all in a single DB transaction
-//! - The explicit double-spend test from CLAUDE.md Phase 3
+//! The [`Ledger`] trait is the public API; [`InMemoryLedger`] is the
+//! fully-tested implementation; [`PostgresLedger`] is a stub whose
+//! schema lives in `migrations/20240101000000_initial.sql`.
 //!
-//! Do not stub out API handlers in this crate. The ledger is a correctness
-//! boundary; its public API should reflect what the persistence layer
-//! actually guarantees.
+//! ## Atomicity
+//!
+//! In-memory atomicity is `&mut self`: each operation either completes
+//! fully or returns `Err` with no state change. The Postgres adapter
+//! (future) uses a single `BEGIN; ... COMMIT;` per operation.
+//!
+//! ## Append-only `ledger_entries`
+//!
+//! Every balance change writes a row. The Postgres schema enforces
+//! append-only via a trigger; the in-memory adapter exposes entries via
+//! [`InMemoryLedger::entries`].
 
-/// Placeholder for Phase 0. Real types arrive in Phase 3.
-#[derive(Debug, Clone, Copy)]
-pub struct Ledger;
+pub mod error;
+pub mod memory;
+pub mod model;
+pub mod postgres;
 
-impl Ledger {
-    pub fn new() -> Self {
-        Self
-    }
+pub use error::LedgerError;
+pub use memory::InMemoryLedger;
+pub use model::{
+    Account, Amount, Asset, AssetPair, Bucket, EntryReason, LedgerEntry, OrderRow, OrderStatus,
+    PlaceOrder, PlaceReceipt, TradeSettlement, UserId,
+};
+pub use postgres::PostgresLedger;
+
+// Re-export `OrderId` from common so trait signatures can name it.
+pub use common::OrderId;
+
+/// The public API every ledger backend must satisfy.
+///
+/// Sync on purpose: `InMemoryLedger` is sync, and `PostgresLedger` (when
+/// it lands) can either block on its connection or `spawn_blocking` its
+/// async work. Either way the test suite uses the same surface.
+pub trait Ledger {
+    /// Credit `amount` of `asset` to `user`'s `available` balance.
+    fn deposit(
+        &mut self,
+        user: UserId,
+        asset: Asset,
+        amount: Amount,
+    ) -> Result<(), LedgerError>;
+
+    /// Debit `amount` from `user`'s `available` balance. Errors with
+    /// [`InsufficientFunds`](LedgerError::InsufficientFunds) if not
+    /// enough. **Never touches `locked`.**
+    fn withdraw_available(
+        &mut self,
+        user: UserId,
+        asset: Asset,
+        amount: Amount,
+    ) -> Result<(), LedgerError>;
+
+    /// Place an order. Locks the required funds
+    /// (`available → locked`) atomically. Errors with
+    /// [`InsufficientFunds`](LedgerError::InsufficientFunds) if the
+    /// user can't afford it. The canonical Phase 3 double-spend test
+    /// relies on this returning an error rather than allowing a
+    /// partial lock.
+    fn place(&mut self, order: &PlaceOrder) -> Result<PlaceReceipt, LedgerError>;
+
+    /// Cancel an open order. Releases any unfilled locked funds back
+    /// to available. Errors if the order isn't `open`.
+    fn cancel(&mut self, order_id: OrderId) -> Result<(), LedgerError>;
+
+    /// Settle a single trade atomically. Updates both sides' balances,
+    /// writes 4 ledger entries, increments `filled_qty` on both orders,
+    /// marks them `filled` when exhausted. The whole operation either
+    /// completes or rolls back.
+    fn settle_trade(&mut self, trade: &TradeSettlement) -> Result<(), LedgerError>;
+
+    /// Current balance for `(user, asset)`. Returns zeroed default if
+    /// no entry exists.
+    fn account(&self, user: UserId, asset: Asset) -> Account;
+
+    /// Look up an order's persisted row by id.
+    fn order(&self, order_id: OrderId) -> Option<OrderRow>;
 }
 
-impl Default for Ledger {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ledger_constructs() {
-        let _ledger = Ledger::new();
-    }
-}
+// Re-export the matching engine's `Order` so callers have a single
+// import path; the ledger crate builds its own `PlaceOrder` on top.
+pub use common::Order;
