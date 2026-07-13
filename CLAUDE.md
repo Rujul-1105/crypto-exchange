@@ -23,6 +23,8 @@ app — do not let that happen.
 
 - [ ] Cargo workspace with separate crates: `matching-engine` (pure lib, no async/db deps),
       `ledger`, `api`, `common` (shared types: OrderId, Price, Qty, Symbol, etc.)
+- [ ] Top-level `frontend/` directory for the Phase 7 Next.js SPA (outside the Cargo
+      workspace, documented in Phase 7's section below)
 - [ ] `matching-engine` crate has **zero** dependencies on tokio, sqlx, axum, or anything async.
       It must be usable from a plain `#[test]` with no runtime.
 - [ ] README stating the non-goals above, so future-me (or a reviewer) knows this was deliberate.
@@ -131,6 +133,35 @@ balances update correctly, restart the process and confirm book state recovers f
 - [ ] Explicit list of what was deliberately left out and why (real custody, fiat, KYC)
 
 **Exit criteria:** doc exists, load test numbers exist, project is demo-ready.
+
+---
+
+## Phase 7 — Frontend (Next.js SPA)
+
+**Goal:** a separate Next.js single-page app that consumes the Phase 5
+Axum REST API, giving reviewers a visual UI to place orders, watch the
+book, and inspect balances / trade history. Lives outside the Rust
+workspace in `frontend/` at the repo root, since Next.js brings its own
+Node.js toolchain and mixing it into the Cargo workspace would add noise
+without benefit.
+
+- [ ] Next.js 14+ with App Router + TypeScript
+- [ ] Auth: JWT in `Authorization: Bearer …`, stored in an httpOnly cookie
+      set by the API (Phase 4's session token)
+- [ ] Pages: login / register, dashboard with balances, order-entry form,
+      order book view, trade history
+- [ ] Server state via TanStack Query (or SWR); polling for now — no
+      WebSocket yet (deferred to a later minor phase)
+- [ ] REST client in `src/lib/api.ts` — single source of truth for
+      endpoint paths and types, mirroring the Phase 5 OpenAPI schema
+- [ ] Component-level tests with React Testing Library (optional but
+      encouraged for any non-trivial view)
+
+**Exit criteria:** `cd frontend && npm install && npm run dev` starts
+the dev server; `npm run build` produces a working static or SSR export;
+an end-to-end happy path (register → log in → view book → place a limit
+order → see fill → view updated balance) works against a locally-running
+Phase 5 server. README points at the frontend; this section exists.
 
 ---
 

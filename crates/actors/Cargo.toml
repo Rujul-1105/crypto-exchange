@@ -1,0 +1,25 @@
+[package]
+name = "actors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Phase 2: per-symbol actor wrapper around the matching engine.
+#
+# Dependency direction is intentional: actors depend on matching-engine
+# (and its types via `common`), never the other way around. The matching
+# engine must remain async-free per the Phase 0 invariant; this crate is
+# where tokio lives.
+[dependencies]
+common = { path = "../common" }
+matching-engine = { path = "../matching-engine" }
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+
+[dev-dependencies]
+# The load test needs the multi-thread runtime + time + a robust JoinSet.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }

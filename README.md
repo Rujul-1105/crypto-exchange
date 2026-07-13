@@ -32,9 +32,11 @@ demonstration goals.
 ## Layout
 
 ```
+frontend/                # Next.js SPA consuming the REST API (Phase 7)
 crates/
 ├── common/           # shared types: OrderId, Price, Qty, Symbol, Side, ...
 ├── matching-engine/  # pure lib, zero async/db deps — the centerpiece
+├── actors/           # per-symbol tokio actors wrapping the matching engine (Phase 2)
 ├── ledger/           # double-entry accounts (Postgres arrives Phase 3)
 └── api/              # HTTP surface (Axum arrives Phase 4/5)
 ```
@@ -47,14 +49,18 @@ See `CLAUDE.md` for the full phase-by-phase plan and exit criteria.
 cargo build
 cargo test
 cargo bench -p matching-engine    # Phase 1+
+
+# Frontend (Phase 7, docs only — code not yet committed)
+# cd frontend && npm install && npm run dev
 ```
 
 ## Phase status
 
-- **Phase 0 — Scope Lock & Repo Setup** ✅ (this commit)
-- Phase 1 — Order Book Core
-- Phase 2 — Concurrency Layer
+- **Phase 0 — Scope Lock & Repo Setup** ✅
+- **Phase 1 — Order Book Core** ✅
+- **Phase 2 — Concurrency Layer** ✅
 - Phase 3 — Ledger (Double-Entry, Atomic Settlement)
 - Phase 4 — Auth & RBAC
 - Phase 5 — REST API & Persistence Integration
 - Phase 6 — Hardening & Writeup
+- Phase 7 — Frontend (Next.js SPA) — planned, docs only
