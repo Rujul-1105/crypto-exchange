@@ -35,5 +35,6 @@ test-ledger/
 *.log
 
 
-# claude (per-machine harness state; CLAUDE.md itself is tracked)
+# claude (per-machine harness state — do NOT track in git)
 .claude/
+CLAUDE.md
