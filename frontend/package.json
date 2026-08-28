@@ -24,7 +24,8 @@
     "zustand": "^5.0.1",
     "clsx": "^2.1.1",
     "@phosphor-icons/react": "^2.1.7",
-    "bs58": "^5.0.0"
+    "bs58": "^5.0.0",
+    "@solana/spl-token": "^0.4.13"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

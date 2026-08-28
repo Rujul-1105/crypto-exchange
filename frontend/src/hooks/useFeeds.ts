@@ -33,7 +33,10 @@ export function useMarketFeeds(symbol: string) {
     bookReset();
     tradeClear();
     if (depthQuery.data) {
-      bookApplySnapshot(depthQuery.data.bids, depthQuery.data.asks, depthQuery.data.last_trade_price);
+      // REST depth rows are tuples [price, qty] — flatten to the BookLevel shape.
+      const bids = depthQuery.data.bids.map(([price, qty]) => ({ price, qty }));
+      const asks = depthQuery.data.asks.map(([price, qty]) => ({ price, qty }));
+      bookApplySnapshot(bids, asks, depthQuery.data.last_trade_price);
     }
   }, [symbol, depthQuery.data, bookApplySnapshot, bookReset, tradeClear]);
 

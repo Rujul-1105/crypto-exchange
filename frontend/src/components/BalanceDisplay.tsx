@@ -19,11 +19,7 @@ type TokenBalance = {
   locked: number;
 };
 
-function useTokenBalances(): {
-  data: TokenBalance[] | null;
-  isLoading: boolean;
-  error: Error | null;
-} {
+function useTokenBalances() {
   const { connection } = useConnection();
   const { publicKey } = useWallet();
   const program = useExchangeProgram();
@@ -32,7 +28,7 @@ function useTokenBalances(): {
     queryKey: ["balances", publicKey?.toBase58() ?? null],
     enabled: !!publicKey && !!program,
     refetchInterval: 10_000,
-    queryFn: async () => {
+    queryFn: async (): Promise<TokenBalance[]> => {
       if (!publicKey || !program) throw new Error("not ready");
       const programId = program.programId;
       const vaultAuthority = deriveVaultAuthorityPda(programId);

@@ -4,8 +4,6 @@ import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   createChart,
-  CandlestickSeries,
-  HistogramSeries,
   type IChartApi,
   type ISeriesApi,
   type Time,
@@ -61,7 +59,7 @@ export function CandleChart({ symbol, interval }: { symbol: string; interval: In
       autoSize: true,
     });
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
+    const candleSeries = chart.addCandlestickSeries({
       upColor: "#16a34a",
       downColor: "#dc2626",
       borderVisible: false,
@@ -69,7 +67,7 @@ export function CandleChart({ symbol, interval }: { symbol: string; interval: In
       wickDownColor: "#dc2626",
     });
 
-    const volumeSeries = chart.addSeries(HistogramSeries, {
+    const volumeSeries = chart.addHistogramSeries({
       color: "#3b82f6",
       priceFormat: { type: "volume" },
       priceScaleId: "",
