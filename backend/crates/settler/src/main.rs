@@ -7,7 +7,6 @@ mod fill_consumer;
 mod key_loader;
 
 use anchor_client::SettlerClient;
-use common::*;
 use fill_consumer::FillConsumer;
 use key_loader::load_keypair;
 use redis::aio::ConnectionManager;

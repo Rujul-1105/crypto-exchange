@@ -8,11 +8,12 @@
 
 use common::*;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::signature::Keypair;
 use std::time::Duration;
 use tokio::time::sleep;
 
 pub struct SettlerClient {
+    #[allow(dead_code)]
     rpc_url: String,
     _keypair: Keypair,
     program_id: Option<Pubkey>,
