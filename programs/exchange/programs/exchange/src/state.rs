@@ -1,0 +1,31 @@
+//! On-chain account layouts for the exchange program.
+
+use anchor_lang::prelude::*;
+
+#[account]
+pub struct Config {
+    pub admin: Pubkey,           // 32
+    pub vault_authority: Pubkey,  // 32
+    pub fee_bps: u16,            // 2
+    pub paused: bool,            // 1
+    pub bump: u8,                // 1
+    pub _padding: [u8; 64],      // reserved for future fields
+}
+
+impl Config {
+    pub const SIZE: usize = 8 + 32 + 32 + 2 + 1 + 1 + 64;
+}
+
+/// Idempotency record for a settled fill — PDA keyed by (buy_order_id, sell_order_id).
+#[account]
+pub struct SettlementRecord {
+    pub buy_order_id: u64,   // 8
+    pub sell_order_id: u64,  // 8
+    pub settled_at: i64,     // 8
+    pub bump: u8,            // 1
+    pub _padding: [u8; 7],   // round + reserve
+}
+
+impl SettlementRecord {
+    pub const SIZE: usize = 8 + 8 + 8 + 8 + 1 + 7;
+}
