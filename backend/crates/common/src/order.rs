@@ -45,7 +45,7 @@ impl Order {
 }
 
 /// Per-engine monotonic ID generator.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OrderIdGen {
     next: OrderId,
 }
