@@ -8,6 +8,7 @@ import { MarketSwitcher } from "@/components/MarketSwitcher";
 import { Orderbook } from "@/components/Orderbook";
 import { TradeTape } from "@/components/TradeTape";
 import { OrderForm } from "@/components/OrderForm";
+import { CandleChart } from "@/components/CandleChart";
 import { useMarketFeeds } from "@/hooks/useFeeds";
 import { useUiStore } from "@/stores/uiStore";
 
@@ -39,9 +40,7 @@ export default function TradePage() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_320px] lg:grid-cols-[1fr_360px_300px]">
         <div className="space-y-4">
-          <div className="rounded-xl border border-line bg-bg-surface p-12 text-center text-sm text-text-dim">
-            Candle chart lands in Phase 9. The orderbook below is live.
-          </div>
+          <CandleChart symbol={symbol} interval="1m" />
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Orderbook />
             <TradeTape />
