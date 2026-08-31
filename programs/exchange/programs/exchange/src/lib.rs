@@ -1,5 +1,3 @@
-//! Solana CEX demo — vault-based token custody + settle_fill.
-//!
 //! ## Architecture
 //!
 //! - `config` PDA — global exchange config (admin, vault_authority, fee_bps, paused).
@@ -25,8 +23,10 @@ use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 pub mod errors;
+pub mod instructions;
 pub mod state;
 pub use errors::*;
+pub use instructions::*;
 pub use state::*;
 
 declare_id!("DNhvifJ6mcgVRRA4xaNKH82tjoHseN3GQKiLi8R7i6HY");
@@ -110,6 +110,8 @@ pub mod exchange {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, amount)?;
 
+        //  If the SPL transfer succeeds and the ledger update later fails, the user's tokens are gone but their balance is wrong which means the program is broken. In practice this never happens because the ledger arithmetic only fails on u64 overflow, which the deposit amount will never cause, but in production code write tests for that exact case.
+
         let balance = &mut ctx.accounts.user_balance;
         balance.usdc = balance
             .usdc
@@ -129,9 +131,11 @@ pub mod exchange {
         let config = &ctx.accounts.config;
         require!(!config.paused, ExchangeError::ExchangePaused);
 
+        // update ledger first, then transfer out of the shared vault. If the SPL transfer fails after the ledger update, the user has lost their balance but not their tokens, which is a bug. In practice this never happens because the SPL transfer only fails on insufficient funds, which is already checked by the ledger arithmetic.
         let balance = &mut ctx.accounts.user_balance;
         require!(balance.sol >= amount, ExchangeError::InsufficientBalance);
         balance.sol = balance.sol.checked_sub(amount).unwrap();
+        // .checked_sub returns None on underflow, but we already checked the balance above so unwrap is safe.
 
         // vault_authority (PDA) signs the transfer out of the shared vault.
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[ctx.bumps.vault_authority]];
@@ -208,9 +212,7 @@ pub mod exchange {
         let seller = &mut ctx.accounts.seller_balance;
         require!(buyer.user != seller.user, ExchangeError::SameOrderIds);
 
-        let notional = price
-            .checked_mul(quantity)
-            .ok_or(ExchangeError::Overflow)?;
+        let notional = price.checked_mul(quantity).ok_or(ExchangeError::Overflow)?;
 
         // Buyer pays USDC, receives SOL.
         require!(buyer.usdc >= notional, ExchangeError::InsufficientBalance);
@@ -231,251 +233,18 @@ pub mod exchange {
 
         msg!(
             "settle_fill: buy={} sell={} price={} qty={} notional={}",
-            buy_order_id, sell_order_id, price, quantity, notional
+            buy_order_id,
+            sell_order_id,
+            price,
+            quantity,
+            notional
         );
         Ok(())
     }
 }
 
 // ── Account contexts ─────────────────────────────────────────
-
-#[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(
-        init,
-        payer = admin,
-        space = Config::SIZE,
-        seeds = [b"config"],
-        bump,
-    )]
-    pub config: Account<'info, Config>,
-
-    /// CHECK: PDA owning the shared vault token accounts. Created here by `init`.
-    #[account(
-        seeds = [b"vault_authority"],
-        bump,
-    )]
-    pub vault_authority: AccountInfo<'info>,
-
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct AdminOnly<'info> {
-    #[account(
-        seeds = [b"config"],
-        bump = config.bump,
-        has_one = admin,
-    )]
-    pub config: Account<'info, Config>,
-    pub admin: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct DepositSol<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-
-    /// CHECK: PDA owning the shared vault token accounts.
-    #[account(seeds = [b"vault_authority"], bump)]
-    pub vault_authority: AccountInfo<'info>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = vault_authority,
-    )]
-    pub shared_sol_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = user,
-    )]
-    pub user_wsol_ata: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = UserBalance::SIZE,
-        seeds = [b"user_balance", user.key().as_ref()],
-        bump,
-    )]
-    pub user_balance: Account<'info, UserBalance>,
-
-    pub wsol_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct DepositUsdc<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-
-    /// CHECK: PDA
-    #[account(seeds = [b"vault_authority"], bump)]
-    pub vault_authority: AccountInfo<'info>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = vault_authority,
-    )]
-    pub shared_usdc_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = user,
-    )]
-    pub user_usdc_ata: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = UserBalance::SIZE,
-        seeds = [b"user_balance", user.key().as_ref()],
-        bump,
-    )]
-    pub user_balance: Account<'info, UserBalance>,
-
-    pub usdc_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct WithdrawSol<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-
-    /// CHECK: PDA, signer via seeds
-    #[account(seeds = [b"vault_authority"], bump)]
-    pub vault_authority: AccountInfo<'info>,
-
-    #[account(
-        mut,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = vault_authority,
-    )]
-    pub shared_sol_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = user,
-    )]
-    pub user_wsol_ata: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        seeds = [b"user_balance", user.key().as_ref()],
-        bump = user_balance.bump,
-    )]
-    pub user_balance: Account<'info, UserBalance>,
-
-    pub wsol_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct WithdrawUsdc<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-
-    /// CHECK: PDA, signer via seeds
-    #[account(seeds = [b"vault_authority"], bump)]
-    pub vault_authority: AccountInfo<'info>,
-
-    #[account(
-        mut,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = vault_authority,
-    )]
-    pub shared_usdc_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = user,
-    )]
-    pub user_usdc_ata: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        seeds = [b"user_balance", user.key().as_ref()],
-        bump = user_balance.bump,
-    )]
-    pub user_balance: Account<'info, UserBalance>,
-
-    pub usdc_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-#[instruction(buy_order_id: u64, sell_order_id: u64, _price: u64, _quantity: u64)]
-pub struct SettleFill<'info> {
-    /// Any signer (settler worker); the instruction is permissionless and
-    /// idempotent on (buy_order_id, sell_order_id).
-    #[account(mut)]
-    pub settler: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-
-    #[account(
-        init,
-        payer = settler,
-        space = SettlementRecord::SIZE,
-        seeds = [
-            b"settlement",
-            buy_order_id.to_le_bytes().as_ref(),
-            sell_order_id.to_le_bytes().as_ref(),
-        ],
-        bump,
-    )]
-    pub settlement_record: Account<'info, SettlementRecord>,
-
-    #[account(
-        mut,
-        seeds = [b"user_balance", buyer_balance.user.as_ref()],
-        bump = buyer_balance.bump,
-    )]
-    pub buyer_balance: Account<'info, UserBalance>,
-
-    #[account(
-        mut,
-        seeds = [b"user_balance", seller_balance.user.as_ref()],
-        bump = seller_balance.bump,
-    )]
-    pub seller_balance: Account<'info, UserBalance>,
-
-    pub system_program: Program<'info, System>,
-}
+//
+// Moved to `instructions.rs`. Items are re-exported at the crate root
+// (`pub use instructions::*;`), so handlers below can still write
+// `Context<Initialize>`, `Context<DepositSol>`, etc. without a prefix.
