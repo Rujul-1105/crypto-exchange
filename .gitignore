@@ -39,3 +39,6 @@ test-ledger/
 # claude (per-machine harness state — do NOT track in git)
 .claude/
 CLAUDE.md
+
+# Per-machine learning artifacts (not part of the repo; same convention as CLAUDE.md)
+frontend/.local/
