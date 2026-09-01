@@ -5,6 +5,7 @@ frontend/.next/
 frontend/out/
 frontend/node_modules/
 frontend/tsconfig.tsbuildinfo
+node_modules/
 
 # Env / secrets
 .env
@@ -39,6 +40,4 @@ test-ledger/
 # claude (per-machine harness state — do NOT track in git)
 .claude/
 CLAUDE.md
-
-# Per-machine learning artifacts (not part of the repo; same convention as CLAUDE.md)
 frontend/.local/
