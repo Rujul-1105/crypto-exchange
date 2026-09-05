@@ -11,7 +11,7 @@
 use actix::{Actor, ActorContext, AsyncContext, Handler, Message, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
-use common::*;
+// use common::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -94,8 +94,13 @@ impl Handler<PushText> for WsSession {
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
     fn handle(&mut self, item: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match item {
-            Ok(ws::Message::Ping(b)) => { self.last_ping = Instant::now(); ctx.pong(&b); }
-            Ok(ws::Message::Pong(_)) => { self.last_ping = Instant::now(); }
+            Ok(ws::Message::Ping(b)) => {
+                self.last_ping = Instant::now();
+                ctx.pong(&b);
+            }
+            Ok(ws::Message::Pong(_)) => {
+                self.last_ping = Instant::now();
+            }
             Ok(ws::Message::Text(t)) => {
                 self.last_ping = Instant::now();
                 match serde_json::from_str::<ClientMessage>(&t) {
@@ -113,7 +118,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
                     }
                 }
             }
-            Ok(ws::Message::Close(reason)) => { ctx.close(reason); ctx.stop(); }
+            Ok(ws::Message::Close(reason)) => {
+                ctx.close(reason);
+                ctx.stop();
+            }
             _ => {}
         }
     }

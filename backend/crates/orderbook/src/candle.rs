@@ -8,11 +8,8 @@
 use common::*;
 use std::collections::HashMap;
 
-const TRACKED_INTERVALS: &[CandleInterval] = &[
-    CandleInterval::M1,
-    CandleInterval::M5,
-    CandleInterval::H1,
-];
+const TRACKED_INTERVALS: &[CandleInterval] =
+    &[CandleInterval::M1, CandleInterval::M5, CandleInterval::H1];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CandleAggregator {
@@ -30,13 +27,9 @@ impl CandleAggregator {
 
     /// Update all buckets with this trade. Returns the latest 1m candle and
     /// whether it just closed (the bucket flipped to a new minute).
-    pub fn update(
-        &mut self,
-        price: Price,
-        qty: Quantity,
-        ts: Timestamp,
-    ) -> (Candle, bool) {
+    pub fn update(&mut self, price: Price, qty: Quantity, ts: Timestamp) -> (Candle, bool) {
         let mut one_min = None;
+
         for interval in TRACKED_INTERVALS {
             let bucket_ts = Candle::bucket_for(ts, *interval);
             let key = interval.as_str();

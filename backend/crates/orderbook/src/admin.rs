@@ -4,8 +4,6 @@
 //! - `GET /api/orderbook/:symbol` — depth snapshot
 //! - `GET /api/trades/:symbol` — recent trades (in-memory ring; persistence
 //!   via SQLite is added later)
-//! - `POST /admin/snapshot` — trigger an immediate snapshot
-//! - `POST /admin/place` — direct test endpoint to inject orders (Phase 4 only)
 
 use actix_web::{web, HttpResponse, Responder};
 use common::*;

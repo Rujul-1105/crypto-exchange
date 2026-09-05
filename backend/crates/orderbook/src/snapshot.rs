@@ -9,11 +9,11 @@
 
 use crate::engine::MatchingEngine;
 use crate::market::SymbolRegistry;
-use common::*;
+// use common::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+// use tokio::sync::Mutex;
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
@@ -81,12 +81,18 @@ pub async fn load_latest_snapshot(dir: &Path) -> anyhow::Result<Option<Persisted
         if !name.starts_with("snap-") || !name.ends_with(".bin") {
             continue;
         }
-        let ts: i64 = name.trim_start_matches("snap-").trim_end_matches(".bin").parse().unwrap_or(0);
+        let ts: i64 = name
+            .trim_start_matches("snap-")
+            .trim_end_matches(".bin")
+            .parse()
+            .unwrap_or(0);
         if newest.as_ref().map(|(_, t)| ts > *t).unwrap_or(true) {
             newest = Some((entry.path(), ts));
         }
     }
-    let Some((path, _)) = newest else { return Ok(None) };
+    let Some((path, _)) = newest else {
+        return Ok(None);
+    };
     let bytes = tokio::fs::read(&path).await?;
     let state: PersistedState = bincode::deserialize(&bytes)?;
     Ok(Some(state))
@@ -101,7 +107,11 @@ async fn gc_snapshots(dir: &Path, keep: usize) -> anyhow::Result<()> {
         if !name.starts_with("snap-") || !name.ends_with(".bin") {
             continue;
         }
-        let ts: i64 = name.trim_start_matches("snap-").trim_end_matches(".bin").parse().unwrap_or(0);
+        let ts: i64 = name
+            .trim_start_matches("snap-")
+            .trim_end_matches(".bin")
+            .parse()
+            .unwrap_or(0);
         files.push((entry.path(), ts));
     }
     files.sort_by_key(|(_, t)| -t); // newest first
@@ -112,11 +122,7 @@ async fn gc_snapshots(dir: &Path, keep: usize) -> anyhow::Result<()> {
 }
 
 /// Spawn a task that snapshots every `interval_ms`.
-pub fn spawn_snapshot_task(
-    registry: SymbolRegistry,
-    dir: PathBuf,
-    interval_ms: u64,
-) {
+pub fn spawn_snapshot_task(registry: SymbolRegistry, dir: PathBuf, interval_ms: u64) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
         // Skip the first immediate tick.

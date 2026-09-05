@@ -16,8 +16,7 @@ pub type Timestamp = i64;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub id: OrderId,
-    /// Wallet pubkey as base58 string. On the matching layer we don't care
-    /// about the curve — the settler worker takes care of signing.
+    /// Wallet pubkey as base58 string
     pub user: String,
     pub symbol: Symbol,
     pub side: Side,

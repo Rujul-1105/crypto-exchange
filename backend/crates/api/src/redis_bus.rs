@@ -30,7 +30,7 @@ impl RedisBus {
         last_id: &str,
         block_ms: usize,
     ) -> anyhow::Result<Vec<(String, EventEnvelope)>> {
-        use futures::stream::TryStreamExt;
+        // use futures::stream::TryStreamExt;
         let mut conn = self.conn.clone();
         let opts = redis::streams::StreamReadOptions::default()
             .block(block_ms)
@@ -41,7 +41,9 @@ impl RedisBus {
         let mut out = Vec::new();
         for range in res {
             for entry in range.ids {
-                let Some(payload) = entry.map.get("data") else { continue };
+                let Some(payload) = entry.map.get("data") else {
+                    continue;
+                };
                 let Ok(payload_str) = redis::from_redis_value::<String>(payload) else {
                     continue;
                 };

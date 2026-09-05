@@ -66,7 +66,11 @@ pub struct EventEnvelope {
 
 impl EventEnvelope {
     pub fn new(stream_id: impl Into<String>, symbol: Symbol, event: EngineEvent) -> Self {
-        Self { stream_id: stream_id.into(), symbol, event }
+        Self {
+            stream_id: stream_id.into(),
+            symbol,
+            event,
+        }
     }
 }
 

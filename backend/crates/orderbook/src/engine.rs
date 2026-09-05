@@ -12,9 +12,10 @@
 //! publish, WS broadcast, SQLite persistence) live in callers that consume
 //! the returned events.
 
-use common::*;
-use crate::orderbook::OrderBook;
 use crate::candle::CandleAggregator;
+use crate::orderbook::DepthSnapshot;
+use crate::orderbook::OrderBook;
+use common::*;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,7 +62,7 @@ impl MatchingEngine {
         self.book.top_of_book()
     }
 
-    pub fn depth_snapshot(&self, levels: usize) -> crate::orderbook::DepthSnapshot {
+    pub fn depth_snapshot(&self, levels: usize) -> DepthSnapshot {
         self.book.depth_snapshot(levels)
     }
 
@@ -334,11 +335,27 @@ impl MatchingEngine {
                 symbol: self.symbol.clone(),
                 price: fill_price,
                 quantity: fill_qty,
-                buy_order_id: if order.side == Side::Buy { order.id } else { maker.id },
-                sell_order_id: if order.side == Side::Sell { order.id } else { maker.id },
+                buy_order_id: if order.side == Side::Buy {
+                    order.id
+                } else {
+                    maker.id
+                },
+                sell_order_id: if order.side == Side::Sell {
+                    order.id
+                } else {
+                    maker.id
+                },
                 taker_side: order.side,
-                buyer: if order.side == Side::Buy { order.user.clone() } else { maker.user.clone() },
-                seller: if order.side == Side::Sell { order.user.clone() } else { maker.user.clone() },
+                buyer: if order.side == Side::Buy {
+                    order.user.clone()
+                } else {
+                    maker.user.clone()
+                },
+                seller: if order.side == Side::Sell {
+                    order.user.clone()
+                } else {
+                    maker.user.clone()
+                },
                 timestamp: now,
                 settle_status: SettleStatus::Pending,
             };
@@ -347,7 +364,9 @@ impl MatchingEngine {
                 maker: maker.clone(),
                 taker: order.clone(),
             });
-            events.push(EngineEvent::Trade { trade: trade.clone() });
+            events.push(EngineEvent::Trade {
+                trade: trade.clone(),
+            });
 
             self.push_recent_trade(trade.clone());
 
@@ -386,7 +405,9 @@ impl MatchingEngine {
             }
         }
 
-        events.push(EngineEvent::Accepted { order: order.clone() });
+        events.push(EngineEvent::Accepted {
+            order: order.clone(),
+        });
 
         if trade_occurred {
             if let Some(last) = self.book.last_trade_price {
@@ -421,7 +442,10 @@ impl MatchingEngine {
             OrderType::StopLimit { trigger, .. } => *trigger,
             _ => unreachable!(),
         };
-        self.stop_queue.entry(trigger).or_default().push_back(order.id);
+        self.stop_queue
+            .entry(trigger)
+            .or_default()
+            .push_back(order.id);
         self.stop_orders.insert(order.id, order.clone());
         vec![EngineEvent::Accepted { order }]
     }
@@ -584,7 +608,12 @@ mod tests {
         let _ = events;
 
         assert_eq!(eng.open_order_count(), 1);
-        let top = eng.book.asks.levels.get(&dec!(100)).expect("level should exist");
+        let top = eng
+            .book
+            .asks
+            .levels
+            .get(&dec!(100))
+            .expect("level should exist");
         assert_eq!(top.len(), 1);
     }
 
@@ -628,8 +657,14 @@ mod tests {
             })
             .expect("fill event");
 
-        assert_eq!(fill.sell_order_id, alice_id, "FIFO: should match alice first");
-        assert_ne!(fill.sell_order_id, bob_id, "FIFO: should not match bob first");
+        assert_eq!(
+            fill.sell_order_id, alice_id,
+            "FIFO: should match alice first"
+        );
+        assert_ne!(
+            fill.sell_order_id, bob_id,
+            "FIFO: should not match bob first"
+        );
         // Bob still resting.
         assert!(eng.book.orders.contains_key(&bob_id));
         assert!(!eng.book.orders.contains_key(&alice_id));

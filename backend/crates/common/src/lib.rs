@@ -36,5 +36,4 @@ pub const STREAM_ORDERS_INCOMING: &str = "orders:incoming";
 pub const STREAM_EVENTS_OUTGOING: &str = "events:outgoing";
 pub const STREAM_SETTLE_UPDATES: &str = "settle:updates";
 
-// Default demo symbol if `DEMO_SYMBOLS` env is unset.
 pub const DEFAULT_SYMBOL: &str = "SOL-USDC";

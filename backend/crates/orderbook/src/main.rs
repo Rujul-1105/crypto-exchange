@@ -20,7 +20,10 @@ use orderbook::{
 async fn main() -> std::io::Result<()> {
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,orderbook=debug")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,orderbook=debug")),
+        )
         .init();
 
     // ── Config from env ──
@@ -52,10 +55,7 @@ async fn main() -> std::io::Result<()> {
             if let Err(e) = hydrate_registry(&registry, &state).await {
                 tracing::warn!("hydrate from snapshot failed: {e}");
             } else {
-                tracing::info!(
-                    "hydrated {} engine(s) from snapshot",
-                    state.engines.len()
-                );
+                tracing::info!("hydrated {} engine(s) from snapshot", state.engines.len());
             }
         }
         Ok(None) => tracing::info!("no snapshot found, starting fresh"),
@@ -81,7 +81,10 @@ async fn main() -> std::io::Result<()> {
     }
 
     // ── Start actix-web admin ──
-    let state = AdminState { registry: registry.clone() };
+    let state = AdminState {
+        registry: registry.clone(),
+    };
+
     let data = web::Data::new(state);
     tracing::info!("orderbook admin listening on {bind}");
     HttpServer::new(move || {
@@ -89,6 +92,7 @@ async fn main() -> std::io::Result<()> {
             .allow_any_origin()
             .allow_any_method()
             .allow_any_header();
+
         App::new()
             .wrap(cors)
             .wrap(middleware::Logger::default())
@@ -99,10 +103,7 @@ async fn main() -> std::io::Result<()> {
                 "/api/orderbook/{symbol}",
                 web::get().to(admin::orderbook_snapshot),
             )
-            .route(
-                "/api/trades/{symbol}",
-                web::get().to(admin::recent_trades),
-            )
+            .route("/api/trades/{symbol}", web::get().to(admin::recent_trades))
     })
     .bind(&bind)?
     .run()

@@ -5,20 +5,13 @@
 //! `events:outgoing`. Also consumes `settle:updates` from the settler worker
 //! to flip `Trade.settle_status`.
 
+use crate::market::SymbolRegistry;
+use crate::redis_bus::RedisBus;
 use common::*;
 use redis::AsyncCommands;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-use crate::engine::MatchingEngine;
-use crate::market::SymbolRegistry;
-use crate::redis_bus::RedisBus;
-
-pub fn spawn_consumer(
-    registry: SymbolRegistry,
-    bus: RedisBus,
-    last_consumed_id: String,
-) {
+pub fn spawn_consumer(registry: SymbolRegistry, bus: RedisBus, last_consumed_id: String) {
     tokio::spawn(async move {
         let mut conn = bus.conn.clone();
         let mut last_id = last_consumed_id;
@@ -45,7 +38,9 @@ pub fn spawn_consumer(
                     for range in ranges {
                         for entry in range.ids {
                             last_id = entry.id.clone();
-                            let Some(payload) = entry.map.get("data") else { continue };
+                            let Some(payload) = entry.map.get("data") else {
+                                continue;
+                            };
                             let Ok(payload_str) = redis::from_redis_value::<String>(payload) else {
                                 tracing::warn!("non-string payload in orders:incoming");
                                 continue;
@@ -57,7 +52,8 @@ pub fn spawn_consumer(
                                     continue;
                                 }
                             };
-                            dispatch(Arc::clone(&registry_inners(&registry).await), &cmd, &bus).await;
+                            dispatch(Arc::clone(&registry_inners(&registry).await), &cmd, &bus)
+                                .await;
                         }
                     }
                 }

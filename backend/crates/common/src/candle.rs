@@ -65,7 +65,12 @@ pub struct Candle {
 }
 
 impl Candle {
-    pub fn new(symbol: Symbol, interval: CandleInterval, bucket_ts: Timestamp, price: Price) -> Self {
+    pub fn new(
+        symbol: Symbol,
+        interval: CandleInterval,
+        bucket_ts: Timestamp,
+        price: Price,
+    ) -> Self {
         Self {
             symbol,
             interval: interval.as_str().to_string(),

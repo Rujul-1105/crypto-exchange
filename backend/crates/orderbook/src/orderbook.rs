@@ -15,14 +15,21 @@ pub struct BookSide {
 }
 
 impl BookSide {
-    pub fn best_bid(levels: &BTreeMap<Price, VecDeque<OrderId>>) -> Option<(Price, &VecDeque<OrderId>)> {
+    pub fn best_bid(
+        levels: &BTreeMap<Price, VecDeque<OrderId>>,
+    ) -> Option<(Price, &VecDeque<OrderId>)> {
         levels.iter().next_back().map(|(p, q)| (*p, q))
     }
-    pub fn best_ask(levels: &BTreeMap<Price, VecDeque<OrderId>>) -> Option<(Price, &VecDeque<OrderId>)> {
+    pub fn best_ask(
+        levels: &BTreeMap<Price, VecDeque<OrderId>>,
+    ) -> Option<(Price, &VecDeque<OrderId>)> {
         levels.iter().next().map(|(p, q)| (*p, q))
     }
 
     /// Sum the remaining qty at `price` by walking the orders map.
+
+    // Calculates the total remaining quantity at a given price level.
+    // Finds all order IDs at that price, looks up their orders, sums each order's remaining quantity and returns 0 if the level doesn't exist.
     pub fn level_qty(&self, price: Price, orders: &HashMap<OrderId, Order>) -> Quantity {
         self.levels
             .get(&price)
@@ -69,7 +76,7 @@ impl OrderBook {
     /// Top `levels` bids (descending) and asks (ascending), each as
     /// `(price, total_remaining_qty)` vectors.
     pub fn depth_snapshot(&self, levels: usize) -> DepthSnapshot {
-        let mut bids: Vec<(Price, Quantity)> = self
+        let bids: Vec<(Price, Quantity)> = self
             .bids
             .levels
             .iter()
@@ -77,6 +84,7 @@ impl OrderBook {
             .take(levels)
             .map(|(p, _)| (*p, self.bids.level_qty(*p, &self.orders)))
             .collect();
+
         let asks: Vec<(Price, Quantity)> = self
             .asks
             .levels
@@ -84,6 +92,7 @@ impl OrderBook {
             .take(levels)
             .map(|(p, _)| (*p, self.asks.level_qty(*p, &self.orders)))
             .collect();
+
         DepthSnapshot {
             symbol: self.symbol.clone(),
             bids,

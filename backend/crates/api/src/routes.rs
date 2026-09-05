@@ -3,7 +3,7 @@
 
 use actix_web::{web, HttpResponse, Responder};
 use common::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::{self, NonceRequest, NonceResponse, NonceStore, VerifyRequest, VerifyResponse};
 use crate::redis_bus::RedisBus;
@@ -41,7 +41,10 @@ pub async fn orderbook(
     query: web::Query<DepthQuery>,
 ) -> impl Responder {
     let symbol = path.into_inner();
-    let url = format!("{}/api/orderbook/{}?depth={}", state.orderbook_admin, symbol, query.depth);
+    let url = format!(
+        "{}/api/orderbook/{}?depth={}",
+        state.orderbook_admin, symbol, query.depth
+    );
     proxy_get(&url).await
 }
 
@@ -60,7 +63,10 @@ pub async fn trades(
     query: web::Query<TradesQuery>,
 ) -> impl Responder {
     let symbol = path.into_inner();
-    let url = format!("{}/api/trades/{}?limit={}", state.orderbook_admin, symbol, query.limit);
+    let url = format!(
+        "{}/api/trades/{}?limit={}",
+        state.orderbook_admin, symbol, query.limit
+    );
     proxy_get(&url).await
 }
 
@@ -112,8 +118,7 @@ pub async fn auth_verify(
     };
     let message = auth::nonce_message(&body.pubkey, &stored);
     if !auth::verify_signature(&body.pubkey, &message, &body.signature) {
-        return HttpResponse::Unauthorized()
-            .json(serde_json::json!({"error": "bad_signature"}));
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_signature"}));
     }
     let ttl_hours: i64 = std::env::var("JWT_TTL_HOURS")
         .ok()
@@ -220,11 +225,19 @@ pub async fn amend_order(
         Err(resp) => return resp,
     };
     let order_id = path.into_inner();
-    let new_price: Price = match body.get("price").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()) {
+    let new_price: Price = match body
+        .get("price")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+    {
         Some(p) => p,
         None => return HttpResponse::BadRequest().body("missing price"),
     };
-    let new_qty: Quantity = match body.get("quantity").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()) {
+    let new_qty: Quantity = match body
+        .get("quantity")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+    {
         Some(q) => q,
         None => return HttpResponse::BadRequest().body("missing quantity"),
     };
@@ -247,7 +260,10 @@ pub async fn get_order(state: web::Data<ApiState>, path: web::Path<u64>) -> impl
     proxy_get(&url).await
 }
 
-pub async fn list_orders(state: web::Data<ApiState>, query: web::Query<std::collections::HashMap<String, String>>) -> impl Responder {
+pub async fn list_orders(
+    state: web::Data<ApiState>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
     let qs = query
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
@@ -287,20 +303,27 @@ fn require_user(req: &actix_web::HttpRequest, secret: &str) -> Result<String, Ht
         &validation,
     ) {
         Ok(d) => d,
-        Err(_) => return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_jwt"}))),
+        Err(_) => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_jwt"})))
+        }
     };
     data.claims
         .get("sub")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .ok_or_else(|| HttpResponse::Unauthorized().json(serde_json::json!({"error": "missing_sub"})))
+        .ok_or_else(|| {
+            HttpResponse::Unauthorized().json(serde_json::json!({"error": "missing_sub"}))
+        })
 }
 
 async fn proxy_get(url: &str) -> HttpResponse {
     match reqwest_get(url).await {
-        Ok((status, body)) => HttpResponse::build(actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY))
-            .content_type("application/json")
-            .body(body),
+        Ok((status, body)) => HttpResponse::build(
+            actix_web::http::StatusCode::from_u16(status)
+                .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY),
+        )
+        .content_type("application/json")
+        .body(body),
         Err(e) => HttpResponse::BadGateway().body(format!("upstream: {e}")),
     }
 }

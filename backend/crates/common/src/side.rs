@@ -33,14 +33,17 @@ impl Side {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrderType {
-    /// Limit at a specified price.
     Limit,
-    /// Immediate-or-cancel against best available liquidity.
     Market,
     /// Stop-loss that becomes a market order when `trigger` price is crossed.
-    Stop { trigger: Price },
+    Stop {
+        trigger: Price,
+    },
     /// Stop that becomes a limit at `limit` when `trigger` is crossed.
-    StopLimit { trigger: Price, limit: Price },
+    StopLimit {
+        trigger: Price,
+        limit: Price,
+    },
 }
 
 impl OrderType {
@@ -72,11 +75,8 @@ pub enum OrderStatus {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SettleStatus {
-    /// Orderbook emitted the fill; not yet submitted on-chain.
     #[default]
     Pending,
-    /// Anchor settle_fill confirmed on-chain.
     Confirmed,
-    /// Settler gave up after retries.
     Failed,
 }

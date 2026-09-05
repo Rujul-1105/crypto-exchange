@@ -1,5 +1,4 @@
-//! Market maker bot — spawns one quoter per symbol, quotes N levels each side
-//! around the last trade price (or a configured starting mid).
+//! Market maker bot — spawns one quoter per symbol, quotes N levels each side around the last trade price (or a configured starting mid).
 
 use common::*;
 use std::sync::Arc;
