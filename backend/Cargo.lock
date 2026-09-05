@@ -3188,7 +3188,6 @@ dependencies = [
  "actix-web",
  "anyhow",
  "async-trait",
- "bincode",
  "chrono",
  "common",
  "dotenvy",

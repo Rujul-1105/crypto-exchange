@@ -70,6 +70,53 @@ impl MatchingEngine {
         self.book.open_order_count()
     }
 
+    /// Flip `settle_status` on the trade with the given id and return the
+    /// updated trade so the caller can rebroadcast it. Returns `None` if no
+    /// trade with that id is in the recent-trades ring.
+    pub fn update_settle_status(
+        &mut self,
+        trade_id: TradeId,
+        status: SettleStatus,
+    ) -> Option<Trade> {
+        let trade = self
+            .recent_trades
+            .iter_mut()
+            .find(|t| t.id == trade_id)?;
+        trade.settle_status = status;
+        Some(trade.clone())
+    }
+
+    /// Walk the opposite side and sum the resting quantity at-or-better than
+    /// the order's limit price. Used by the FOK pre-check.
+    fn can_fully_fill(&self, order: &Order) -> bool {
+        let limit = match order.price {
+            Some(p) => p,
+            None => return true, // market equivalent — book decides
+        };
+        let mut available = Quantity::ZERO;
+        let levels = match order.side {
+            Side::Buy => &self.book.asks.levels,
+            Side::Sell => &self.book.bids.levels,
+        };
+        for (price, queue) in levels {
+            let crosses = match order.side {
+                Side::Buy => *price <= limit,
+                Side::Sell => *price >= limit,
+            };
+            if !crosses {
+                break;
+            }
+            for oid in queue {
+                if let Some(o) = self.book.orders.get(oid) {
+                    if o.user != order.user {
+                        available += o.remaining();
+                    }
+                }
+            }
+        }
+        available >= order.remaining()
+    }
+
     /// Cancel an open order. Checks both the regular book and stop queues.
     pub fn cancel(&mut self, id: OrderId, now: Timestamp) -> Vec<EngineEvent> {
         let mut events = Vec::new();
@@ -87,11 +134,18 @@ impl MatchingEngine {
                 remaining,
             });
             if let Some(p) = price {
+                // Compute the actual remaining same-side depth at this price
+                // so the WS depth chart doesn't flash a phantom zero when
+                // there are still orders at the same level.
+                let new_qty = match order.side {
+                    Side::Buy => self.book.bids.level_qty(p, &self.book.orders),
+                    Side::Sell => self.book.asks.level_qty(p, &self.book.orders),
+                };
                 events.push(EngineEvent::BookDelta {
                     symbol: self.symbol.clone(),
                     side: order.side,
                     price: p,
-                    new_qty: Quantity::ZERO,
+                    new_qty,
                     ts: now,
                 });
             }
@@ -190,6 +244,24 @@ impl MatchingEngine {
         order.updated_at = now;
         if order.id == 0 {
             order.id = self.order_id_gen.next();
+        }
+
+        // FOK pre-check: if the book can't fill the order in full at the
+        // limit price, reject immediately without matching anything.
+        if order.tif == TimeInForce::Fok {
+            if !self.can_fully_fill(&order) {
+                order.status = OrderStatus::Cancelled;
+                events.push(EngineEvent::Cancelled {
+                    id: order.id,
+                    symbol: order.symbol.clone(),
+                    user: order.user.clone(),
+                    remaining: order.remaining(),
+                });
+                events.push(EngineEvent::Accepted {
+                    order: order.clone(),
+                });
+                return events;
+            }
         }
 
         // ── Matching loop ──
@@ -384,20 +456,47 @@ impl MatchingEngine {
         match &order.order_type {
             OrderType::Limit | OrderType::StopLimit { .. } => {
                 if order.remaining() > Quantity::ZERO && order.status != OrderStatus::Filled {
-                    let price = order.price.expect("limit must have price");
-                    events.push(EngineEvent::BookDelta {
-                        symbol: self.symbol.clone(),
-                        side: order.side,
-                        price,
-                        new_qty: order.remaining(),
-                        ts: now,
-                    });
-                    self.book.insert(order.clone());
+                    match order.tif {
+                        TimeInForce::Gtc => {
+                            let price = order.price.expect("limit must have price");
+                            events.push(EngineEvent::BookDelta {
+                                symbol: self.symbol.clone(),
+                                side: order.side,
+                                price,
+                                new_qty: order.remaining(),
+                                ts: now,
+                            });
+                            self.book.insert(order.clone());
+                        }
+                        TimeInForce::Ioc | TimeInForce::Fok => {
+                            // IOC: drop any unfilled remainder. FOK should
+                            // never reach this branch — the top-of-function
+                            // pre-check rejects FOK orders that can't fill
+                            // in full — but if some pathological sequence
+                            // leaves a remainder, drop it conservatively.
+                            order.status = OrderStatus::Cancelled;
+                            events.push(EngineEvent::Cancelled {
+                                id: order.id,
+                                symbol: order.symbol.clone(),
+                                user: order.user.clone(),
+                                remaining: order.remaining(),
+                            });
+                        }
+                    }
                 }
             }
             OrderType::Market => {
                 if order.filled == Quantity::ZERO {
                     order.status = OrderStatus::Cancelled;
+                    // Emit a Cancelled event so the WS feed surfaces the kill
+                    // (without this, the order silently dies — clients only
+                    // see "Accepted" with status=Cancelled).
+                    events.push(EngineEvent::Cancelled {
+                        id: order.id,
+                        symbol: order.symbol.clone(),
+                        user: order.user.clone(),
+                        remaining: order.remaining(),
+                    });
                 }
             }
             OrderType::Stop { .. } | OrderType::StopLimit { .. } => {

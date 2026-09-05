@@ -59,6 +59,8 @@ pub enum TimeInForce {
     Gtc,
     /// Immediate-or-cancel — fill what you can, drop the rest.
     Ioc,
+    /// Fill-or-kill — must be fillable in full at the limit, or no fill at all.
+    Fok,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

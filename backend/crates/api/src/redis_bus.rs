@@ -54,4 +54,28 @@ impl RedisBus {
         }
         Ok(out)
     }
+
+    /// Store an SIWS nonce with a TTL (seconds). Single-write; overwrites any
+    /// existing nonce for the pubkey.
+    pub async fn put_nonce(
+        &self,
+        pubkey: &str,
+        nonce: &str,
+        ttl_secs: u64,
+    ) -> anyhow::Result<()> {
+        let mut conn = self.conn.clone();
+        let key = format!("nonce:{pubkey}");
+        let _: () = conn.set_ex(&key, nonce, ttl_secs).await?;
+        Ok(())
+    }
+
+    /// Atomically read+delete the nonce for `pubkey`. The GETDEL makes
+    /// replay impossible — a second verify after the first consumes the
+    /// nonce. Returns `Ok(None)` if absent.
+    pub async fn take_nonce(&self, pubkey: &str) -> anyhow::Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        let key = format!("nonce:{pubkey}");
+        let val: Option<String> = conn.get_del(&key).await?;
+        Ok(val)
+    }
 }

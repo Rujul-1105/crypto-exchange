@@ -48,4 +48,40 @@ impl RedisBus {
             .await?;
         Ok(id)
     }
+
+    /// Read settlement updates from `settle:updates` with `BLOCK block_ms`.
+    /// Returns `(stream_id, SettleUpdate)` pairs.
+    pub async fn read_settle_updates(
+        &self,
+        last_id: &str,
+        block_ms: usize,
+    ) -> anyhow::Result<Vec<(String, SettleUpdate)>> {
+        let mut conn = self.conn.clone();
+        let res: Vec<redis::streams::StreamRangeReply> = conn
+            .xread_options(
+                &[STREAM_SETTLE_UPDATES],
+                &[last_id],
+                &redis::streams::StreamReadOptions::default()
+                    .block(block_ms)
+                    .count(64),
+            )
+            .await?;
+        let mut out = Vec::new();
+        for range in res {
+            for entry in range.ids {
+                let Some(payload) = entry.map.get("data") else {
+                    continue;
+                };
+                let Ok(s) = redis::from_redis_value::<String>(payload) else {
+                    tracing::warn!("non-string payload in settle:updates");
+                    continue;
+                };
+                match serde_json::from_str::<SettleUpdate>(&s) {
+                    Ok(u) => out.push((entry.id, u)),
+                    Err(e) => tracing::warn!("failed to parse SettleUpdate: {e}"),
+                }
+            }
+        }
+        Ok(out)
+    }
 }

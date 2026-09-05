@@ -19,6 +19,15 @@ impl SymbolRegistry {
         }
     }
 
+    /// Look up the engine for `symbol` without creating it. Returns `None`
+    /// if the engine is not registered. Use this for read endpoints and for
+    /// the Redis consumer's dispatch so an unknown symbol doesn't spawn an
+    /// empty book.
+    pub async fn get(&self, symbol: &Symbol) -> Option<Arc<Mutex<MatchingEngine>>> {
+        let map = self.inner.lock().await;
+        map.get(symbol).cloned()
+    }
+
     pub async fn get_or_create(&self, symbol: Symbol) -> Arc<Mutex<MatchingEngine>> {
         let mut map = self.inner.lock().await;
         if let Some(e) = map.get(&symbol) {

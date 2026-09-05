@@ -11,11 +11,12 @@
 use actix::{Actor, ActorContext, AsyncContext, Handler, Message, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
-// use common::*;
+use common::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use crate::auth::verify_jwt;
 use crate::redis_bus::RedisBus;
 use crate::routes::ApiState;
 
@@ -85,10 +86,89 @@ impl Actor for WsSession {
 impl Handler<PushText> for WsSession {
     type Result = ();
     fn handle(&mut self, msg: PushText, ctx: &mut Self::Context) {
-        // We forward every pushed event; the WS frame is JSON. Filtering by
-        // subscription/user is done client-side or in the relay above.
+        // Filter the pushed event against this session's subscriptions before
+        // forwarding. Parse the envelope first so we know the symbol and
+        // event type.
+        let env: EventEnvelope = match serde_json::from_str(&msg.0) {
+            Ok(e) => e,
+            Err(_) => {
+                // Unparseable — forward as-is so the client sees the error.
+                ctx.text(msg.0);
+                return;
+            }
+        };
+        if !should_forward(&env, &self.subscriptions, self.user_pubkey.as_deref()) {
+            return;
+        }
         ctx.text(msg.0);
     }
+}
+
+/// Map an `EventEnvelope` to the channels it would belong to (`book:<sym>`,
+/// `trades:<sym>`, `candles:<sym>:<interval>`, `orders:<sym>`). An envelope
+/// may map to multiple channels (e.g. `Fill` lives on both `orders:*` and
+/// `trades:*`); we forward if **any** matches.
+fn envelope_channels(env: &EventEnvelope) -> Vec<String> {
+    match &env.event {
+        EngineEvent::BookDelta { symbol, .. } => vec![format!("book:{symbol}")],
+        EngineEvent::Trade { trade } => vec![format!("trades:{}", trade.symbol)],
+        EngineEvent::CandleUpdate { symbol, candle, .. } => {
+            vec![format!("candles:{}:{}", symbol, candle.interval)]
+        }
+        EngineEvent::Fill { trade, .. } => vec![
+            format!("orders:{}", trade.symbol),
+            format!("trades:{}", trade.symbol),
+        ],
+        EngineEvent::Accepted { order } => vec![format!("orders:{}", order.symbol)],
+        EngineEvent::Amended { order, .. } => vec![format!("orders:{}", order.symbol)],
+        EngineEvent::Cancelled { symbol, .. } => vec![format!("orders:{symbol}")],
+        EngineEvent::Rejected { symbol, .. } => vec![format!("orders:{symbol}")],
+        EngineEvent::SettleUpdate { symbol, .. } => vec![format!("orders:{symbol}")],
+    }
+}
+
+/// For order-scoped events, return the pubkey whose orders they describe.
+/// Used to enforce the per-user filter on `orders:*` channels.
+fn envelope_owner(env: &EventEnvelope) -> Option<&str> {
+    match &env.event {
+        EngineEvent::Accepted { order } => Some(&order.user),
+        EngineEvent::Amended { order, .. } => Some(&order.user),
+        EngineEvent::Cancelled { user, .. } => Some(user),
+        EngineEvent::Rejected { user, .. } => Some(user),
+        EngineEvent::Fill { trade, .. } => Some(&trade.buyer),
+        _ => None,
+    }
+}
+
+/// Decide whether the session should receive this envelope based on its
+/// subscriptions and (for `orders:*`) its user pubkey.
+fn should_forward(
+    env: &EventEnvelope,
+    subs: &HashSet<String>,
+    user_pubkey: Option<&str>,
+) -> bool {
+    let channels = envelope_channels(env);
+    let mut any_match = false;
+    for ch in &channels {
+        if !subs.contains(ch) {
+            continue;
+        }
+        // For order-scoped channels, enforce the per-user filter.
+        if ch.starts_with("orders:") {
+            if let Some(me) = user_pubkey {
+                match envelope_owner(env) {
+                    Some(owner) if owner == me => return true,
+                    _ => continue,
+                }
+            }
+            // No user_pubkey means the session didn't authenticate; still
+            // forward `orders:*` events (anonymous watch mode). Production
+            // should require auth, but the demo allows unauthenticated WS.
+            return true;
+        }
+        any_match = true;
+    }
+    any_match
 }
 
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
@@ -148,16 +228,4 @@ pub async fn ws_handler(
         tracing::error!("ws start: {e}");
         HttpResponse::InternalServerError().body(format!("ws: {e}"))
     })
-}
-
-fn verify_jwt(token: &str, secret: &str) -> Option<String> {
-    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    validation.set_required_spec_claims(&["exp", "sub"]);
-    let data = jsonwebtoken::decode::<serde_json::Value>(
-        token,
-        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )
-    .ok()?;
-    data.claims.get("sub")?.as_str().map(String::from)
 }

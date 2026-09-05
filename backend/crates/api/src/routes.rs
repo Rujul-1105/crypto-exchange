@@ -4,9 +4,17 @@
 use actix_web::{web, HttpResponse, Responder};
 use common::*;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::auth::{self, NonceRequest, NonceResponse, NonceStore, VerifyRequest, VerifyResponse};
 use crate::redis_bus::RedisBus;
+
+/// `user → order_id → symbol`. Populated by the events:outgoing tracker
+/// spawned in `main.rs`; consulted by `cancel_order` / `amend_order` to
+/// resolve the symbol for an order id without a local user-orders index.
+pub type UserOrdersIndex = Arc<RwLock<HashMap<String, HashMap<u64, String>>>>;
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -15,6 +23,7 @@ pub struct ApiState {
     pub allowed_origins: Vec<String>,
     pub jwt_secret: String,
     pub nonce_store: NonceStore,
+    pub user_orders: UserOrdersIndex,
 }
 
 pub async fn health() -> impl Responder {
@@ -117,6 +126,12 @@ pub async fn auth_verify(
         }
     };
     let message = auth::nonce_message(&body.pubkey, &stored);
+    // Reject stale signed payloads so a captured nonce can't be replayed
+    // beyond the freshness window.
+    if !auth::verify_fresh(&message) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"error": "stale_nonce"}));
+    }
     if !auth::verify_signature(&body.pubkey, &message, &body.signature) {
         return HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_signature"}));
     }
@@ -200,12 +215,23 @@ pub async fn cancel_order(
         Err(resp) => return resp,
     };
     let order_id = path.into_inner();
-    // Cancel requires knowing the symbol; for the demo we send `*` and let
-    // the orderbook server match the (user, order_id) pair. Real impl would
-    // look up symbol from a local index.
+    // Look up the order's symbol from the local user-orders index (kept
+    // in sync with `events:outgoing`). If we don't have it, the order is
+    // either unknown to us or already terminal — return 404.
+    let symbol = {
+        let map = state.user_orders.read().await;
+        map.get(&user).and_then(|m| m.get(&order_id)).cloned()
+    };
+    let symbol = match symbol {
+        Some(s) => s,
+        None => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({"error": "order_not_found"}))
+        }
+    };
     let cmd = OrderCommand::Cancel(CancelOrder {
         user,
-        symbol: "*".into(),
+        symbol,
         order_id,
     });
     match state.bus.push_order(&cmd).await {
@@ -241,9 +267,20 @@ pub async fn amend_order(
         Some(q) => q,
         None => return HttpResponse::BadRequest().body("missing quantity"),
     };
+    let symbol = {
+        let map = state.user_orders.read().await;
+        map.get(&user).and_then(|m| m.get(&order_id)).cloned()
+    };
+    let symbol = match symbol {
+        Some(s) => s,
+        None => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({"error": "order_not_found"}))
+        }
+    };
     let cmd = OrderCommand::Amend(AmendOrder {
         user,
-        symbol: "*".into(),
+        symbol,
         order_id,
         new_price,
         new_quantity: new_qty,
@@ -264,12 +301,24 @@ pub async fn list_orders(
     state: web::Data<ApiState>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
-    let qs = query
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("&");
-    let url = format!("{}/api/orders?{}", state.orderbook_admin, qs);
+    // Whitelist the query keys we forward to the orderbook admin. Anything
+    // else gets a 400 so clients can't smuggle extra parameters through us.
+    const ALLOWED: &[&str] = &["user", "symbol", "status"];
+    let mut qs_parts: Vec<String> = Vec::new();
+    for key in ALLOWED {
+        if let Some(v) = query.get(*key) {
+            qs_parts.push(format!("{key}={v}"));
+        }
+    }
+    for k in query.keys() {
+        if !ALLOWED.contains(&k.as_str()) {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "unknown_query_key",
+                "key": k,
+            }));
+        }
+    }
+    let url = format!("{}/api/orders?{}", state.orderbook_admin, qs_parts.join("&"));
     proxy_get(&url).await
 }
 
@@ -295,25 +344,8 @@ fn require_user(req: &actix_web::HttpRequest, secret: &str) -> Result<String, Ht
     if token.is_empty() {
         return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "missing_jwt"})));
     }
-    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    validation.set_required_spec_claims(&["exp", "sub"]);
-    let data = match jsonwebtoken::decode::<serde_json::Value>(
-        token,
-        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(d) => d,
-        Err(_) => {
-            return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_jwt"})))
-        }
-    };
-    data.claims
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .ok_or_else(|| {
-            HttpResponse::Unauthorized().json(serde_json::json!({"error": "missing_sub"}))
-        })
+    auth::verify_jwt(token, secret)
+        .ok_or_else(|| HttpResponse::Unauthorized().json(serde_json::json!({"error": "bad_jwt"})))
 }
 
 async fn proxy_get(url: &str) -> HttpResponse {

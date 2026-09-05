@@ -45,7 +45,12 @@ pub async fn orderbook_snapshot(
     query: web::Query<DepthQuery>,
 ) -> impl Responder {
     let symbol = path.into_inner();
-    let engine = state.registry.get_or_create(symbol.clone()).await;
+    let Some(engine) = state.registry.get(&symbol).await else {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": "unknown_symbol",
+            "symbol": symbol,
+        }));
+    };
     let eng = engine.lock().await;
     let snap = eng.depth_snapshot(query.depth);
     HttpResponse::Ok().json(snap)
@@ -66,7 +71,12 @@ pub async fn recent_trades(
     query: web::Query<TradesQuery>,
 ) -> impl Responder {
     let symbol = path.into_inner();
-    let engine = state.registry.get_or_create(symbol.clone()).await;
+    let Some(engine) = state.registry.get(&symbol).await else {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": "unknown_symbol",
+            "symbol": symbol,
+        }));
+    };
     let eng = engine.lock().await;
     let n = query.limit.min(eng.recent_trades.len());
     let start = eng.recent_trades.len().saturating_sub(n);

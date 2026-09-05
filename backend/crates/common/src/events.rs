@@ -60,4 +60,14 @@ pub enum EngineEvent {
     },
     /// Order was replaced (price/quantity changed; loses time priority).
     Amended { id: OrderId, order: Order },
+    /// Settlement status flipped (consumed from `settle:updates`). The
+    /// engine rebroadcasts it on `events:outgoing` so WS clients learn
+    /// when a `Trade` was confirmed/failed on-chain.
+    SettleUpdate {
+        trade_id: TradeId,
+        symbol: Symbol,
+        status: SettleStatus,
+        signature: Option<String>,
+        error: Option<String>,
+    },
 }

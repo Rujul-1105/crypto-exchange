@@ -12,8 +12,8 @@ use orderbook::{
     bot::{spawn_bot, BotConfig},
     market::SymbolRegistry,
     redis_bus::RedisBus,
-    redis_consumer::spawn_consumer,
-    snapshot::{hydrate_registry, load_latest_snapshot, spawn_snapshot_task},
+    redis_consumer::{spawn_consumer, spawn_settle_consumer},
+    snapshot::{hydrate_registry, load_latest_snapshot, new_cursor, spawn_snapshot_task},
 };
 
 #[actix_web::main]
@@ -50,28 +50,46 @@ async fn main() -> std::io::Result<()> {
 
     // ── Symbol registry + hydrate from latest snapshot if present ──
     let registry = SymbolRegistry::new();
-    match load_latest_snapshot(&snapshot_dir).await {
+    let initial_cursor = match load_latest_snapshot(&snapshot_dir).await {
         Ok(Some(state)) => {
             if let Err(e) = hydrate_registry(&registry, &state).await {
                 tracing::warn!("hydrate from snapshot failed: {e}");
+                "0".into()
             } else {
-                tracing::info!("hydrated {} engine(s) from snapshot", state.engines.len());
+                tracing::info!(
+                    "hydrated {} engine(s) from snapshot; resuming from cursor {}",
+                    state.engines.len(),
+                    state.last_consumed_order_redis_id
+                );
+                state.last_consumed_order_redis_id
             }
         }
-        Ok(None) => tracing::info!("no snapshot found, starting fresh"),
-        Err(e) => tracing::warn!("snapshot load failed: {e}"),
-    }
+        Ok(None) => {
+            tracing::info!("no snapshot found, starting fresh");
+            "0".into()
+        }
+        Err(e) => {
+            tracing::warn!("snapshot load failed: {e}");
+            "0".into()
+        }
+    };
 
     // Ensure each demo symbol has an engine.
     for sym in &demo_symbols {
         let _ = registry.get_or_create(sym.clone()).await;
     }
 
+    // ── Shared cursor so the snapshot persists the live consumer position ──
+    let cursor = new_cursor(initial_cursor.clone());
+
     // ── Spawn snapshot task ──
-    spawn_snapshot_task(registry.clone(), snapshot_dir, snapshot_interval_ms);
+    spawn_snapshot_task(registry.clone(), snapshot_dir, snapshot_interval_ms, cursor.clone());
 
     // ── Spawn consumer (XREAD orders:incoming) ──
-    spawn_consumer(registry.clone(), bus.clone(), "0".into());
+    spawn_consumer(registry.clone(), bus.clone(), initial_cursor, cursor.clone());
+
+    // ── Spawn settle:updates consumer ──
+    spawn_settle_consumer(registry.clone(), bus.clone(), "0".into());
 
     // ── Spawn market maker bot for the demo symbol ──
     for sym in &demo_symbols {

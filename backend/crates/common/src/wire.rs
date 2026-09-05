@@ -22,6 +22,18 @@ pub enum OrderCommand {
     Amend(AmendOrder),
 }
 
+impl OrderCommand {
+    /// Symbol the command targets. Used by the orderbook's Redis consumer to
+    /// pick the right engine out of the registry.
+    pub fn symbol(&self) -> &Symbol {
+        match self {
+            OrderCommand::Place(p) => &p.symbol,
+            OrderCommand::Cancel(c) => &c.symbol,
+            OrderCommand::Amend(a) => &a.symbol,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlaceOrder {
     pub user: String,

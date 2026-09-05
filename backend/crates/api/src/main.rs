@@ -4,6 +4,10 @@
 
 use actix_cors::Cors;
 use actix_web::{middleware, web, App, HttpServer};
+use common::{EngineEvent, EventEnvelope, OrderStatus};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
 mod auth;
@@ -12,6 +16,7 @@ mod routes;
 mod ws;
 
 use redis_bus::RedisBus;
+use routes::UserOrdersIndex;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -37,22 +42,33 @@ async fn main() -> std::io::Result<()> {
     let bus = RedisBus::connect(&redis_url)
         .await
         .map_err(|e| std::io::Error::other(format!("redis: {e}")))?;
+    let user_orders: UserOrdersIndex = Arc::new(RwLock::new(HashMap::new()));
     let state = routes::ApiState {
-        bus,
+        bus: bus.clone(),
         orderbook_admin,
         allowed_origins: allowed_origins.clone(),
         jwt_secret: jwt_secret.clone(),
-        nonce_store: crate::auth::NonceStore::new(),
+        nonce_store: crate::auth::NonceStore::new(bus.clone()),
+        user_orders: user_orders.clone(),
     };
     let data = web::Data::new(state);
 
+    // Spawn events:outgoing tracker — keeps the user→order_id→symbol index
+    // fresh so cancel/amend can resolve the symbol.
+    spawn_user_orders_tracker(bus.clone(), user_orders);
+
     tracing::info!("api server listening on {bind}");
     HttpServer::new(move || {
-        let cors = Cors::default()
-            .allow_any_origin()
+        // CORS: allow only origins in `ALLOWED_ORIGINS` (comma-separated env
+        // var). Default = `http://localhost:3000` so the Next.js dev server
+        // works out of the box.
+        let mut cors = Cors::default()
             .allow_any_method()
             .allow_any_header()
             .max_age(3600);
+        for origin in &allowed_origins {
+            cors = cors.allowed_origin(origin);
+        }
         App::new()
             .wrap(cors)
             .wrap(middleware::Logger::default())
@@ -81,4 +97,60 @@ async fn main() -> std::io::Result<()> {
     .bind(&bind)?
     .run()
     .await
+}
+
+/// Long-lived task that XREADs `events:outgoing` and updates the user-orders
+/// index. Inserts on `Accepted` (open status only), removes on `Cancelled` /
+/// `Rejected` / `Filled` (status terminal).
+fn spawn_user_orders_tracker(bus: RedisBus, user_orders: UserOrdersIndex) {
+    tokio::spawn(async move {
+        let mut last_id = "0".to_string();
+        loop {
+            match bus.read_events(&last_id, 1000).await {
+                Ok(events) => {
+                    for (stream_id, env) in events {
+                        last_id = stream_id;
+                        if let Some((user, order_id, symbol, open)) =
+                            order_index_update(&env.event)
+                        {
+                            let mut map = user_orders.write().await;
+                            let entry = map.entry(user).or_default();
+                            if open {
+                                entry.insert(order_id, symbol);
+                            } else {
+                                entry.remove(&order_id);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("user_orders_tracker: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    });
+}
+
+/// Extract `(user, order_id, symbol, open)` from an event. Returns `None`
+/// for events that don't change the index.
+fn order_index_update(
+    event: &EngineEvent,
+) -> Option<(String, u64, String, bool)> {
+    match event {
+        EngineEvent::Accepted { order } => {
+            let open = matches!(
+                order.status,
+                OrderStatus::New | OrderStatus::PartiallyFilled
+            );
+            Some((order.user.clone(), order.id, order.symbol.clone(), open))
+        }
+        EngineEvent::Cancelled { id, user, symbol, .. } => {
+            Some((user.clone(), *id, symbol.clone(), false))
+        }
+        EngineEvent::Rejected { id, user, symbol, .. } => {
+            Some((user.clone(), *id, symbol.clone(), false))
+        }
+        _ => None,
+    }
 }
