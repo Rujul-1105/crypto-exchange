@@ -5,7 +5,7 @@ import { AnchorWallet, useAnchorWallet, useConnection } from "@solana/wallet-ada
 import { PublicKey } from "@solana/web3.js";
 import { useMemo } from "react";
 
-import idlJson from "../../../programs/exchange/target/idl/exchange.json";
+import idlJson from "../idl/exchange.json";
 
 const PROGRAM_ID = process.env.NEXT_PUBLIC_PROGRAM_ID ?? "";
 const SOL_MINT = new PublicKey(
