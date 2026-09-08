@@ -42,9 +42,10 @@ pub struct VerifyResponse {
     pub expires_at_unix_ms: i64,
 }
 
-/// Nonce store backed by Redis. `put` writes with a TTL; `take` atomically
-/// reads+deletes (GETDEL), so a successful verify consumes the nonce and a
-/// second attempt returns `None`.
+/// Nonce store backed by Redis. `put` writes the full SIWS message (not just
+/// the nonce) so that on `take` we can hand back the **exact bytes** the
+/// wallet signed. `take` atomically reads+deletes (GETDEL), so a successful
+/// verify consumes the nonce and a second attempt returns `None`.
 #[derive(Clone)]
 pub struct NonceStore {
     bus: RedisBus,
@@ -59,8 +60,9 @@ impl NonceStore {
             .unwrap_or(600);
         Self { bus, ttl_secs }
     }
-    pub async fn put(&self, pubkey: String, nonce: String) {
-        if let Err(e) = self.bus.put_nonce(&pubkey, &nonce, self.ttl_secs).await {
+    /// Store the full signed message so verify can recover the exact bytes.
+    pub async fn put(&self, pubkey: String, message: String) {
+        if let Err(e) = self.bus.put_nonce(&pubkey, &message, self.ttl_secs).await {
             tracing::warn!("put_nonce failed for {pubkey}: {e}");
         }
     }
