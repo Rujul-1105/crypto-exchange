@@ -10,6 +10,7 @@
 
 use crate::engine::MatchingEngine;
 use crate::market::SymbolRegistry;
+use crate::redis_bus::EventCursor;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -44,9 +45,11 @@ impl PersistedState {
     pub fn from_registry(
         registry: &SymbolRegistry,
         cursor: &Cursor,
+        event_cursor: &EventCursor,
     ) -> impl std::future::Future<Output = Self> {
         let registry = registry.clone();
         let cursor = cursor.clone();
+        let event_cursor = event_cursor.clone();
         async move {
             let symbols = registry.list().await;
             let mut engines = Vec::new();
@@ -55,16 +58,20 @@ impl PersistedState {
                     engines.push(engine.clone());
                 }
             }
-            // Read the live cursor so the snapshot captures exactly where
-            // the consumer is, not a stale placeholder.
+            // Read the live cursors so the snapshot captures exactly where
+            // the consumer and publisher are, not stale placeholders.
             let last_consumed = cursor
+                .lock()
+                .map(|c| c.clone())
+                .unwrap_or_else(|_| "0-0".into());
+            let last_published = event_cursor
                 .lock()
                 .map(|c| c.clone())
                 .unwrap_or_else(|_| "0-0".into());
             Self {
                 engines,
                 last_consumed_order_redis_id: last_consumed,
-                last_published_event_redis_id: "0-0".into(),
+                last_published_event_redis_id: last_published,
                 snapshot_at_unix_ms: chrono::Utc::now().timestamp_millis(),
             }
         }
@@ -142,12 +149,13 @@ async fn gc_snapshots(dir: &Path, keep: usize) -> anyhow::Result<()> {
 }
 
 /// Spawn a task that snapshots every `interval_ms`, capturing the live
-/// cursor so a restart picks up where it left off.
+/// cursors so a restart picks up where it left off.
 pub fn spawn_snapshot_task(
     registry: SymbolRegistry,
     dir: PathBuf,
     interval_ms: u64,
     cursor: Cursor,
+    event_cursor: EventCursor,
 ) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
@@ -155,7 +163,7 @@ pub fn spawn_snapshot_task(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let state = PersistedState::from_registry(&registry, &cursor).await;
+            let state = PersistedState::from_registry(&registry, &cursor, &event_cursor).await;
             match save_snapshot(&state, &dir).await {
                 Ok(p) => tracing::info!("snapshot saved: {}", p.display()),
                 Err(e) => tracing::error!("snapshot save failed: {e}"),

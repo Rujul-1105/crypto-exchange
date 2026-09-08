@@ -7,6 +7,12 @@
 //!   - a "feed" task that XREADs `events:outgoing` and pushes to the session's
 //!     outbound channel
 //!   - the session actor that handles inbound client messages (subscribe/unsubscribe/ping)
+//!
+//! Replay protocol — clients that reconnect after a network blip send
+//! `?last_event_id=<stream_id>` as a query param. The feed task starts its
+//! XREAD loop from that id, so the client gets every missed event before
+//! live events resume. `last_event_id` is recorded by the client from each
+//! forwarded message's `stream_id` field.
 
 use actix::{Actor, ActorContext, AsyncContext, Handler, Message, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -23,6 +29,10 @@ use crate::routes::ApiState;
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: Option<String>,
+    /// Stream id of the last event the client successfully received. The
+    /// server uses this as the initial cursor for the feed XREAD loop so
+    /// the client receives everything it missed before live events resume.
+    pub last_event_id: Option<String>,
 }
 
 /// Messages from the client.
@@ -43,6 +53,10 @@ pub struct WsSession {
     pub user_pubkey: Option<String>,
     pub subscriptions: HashSet<String>,
     pub last_ping: Instant,
+    /// Initial cursor for the feed task. `None` means "start from the
+    /// beginning of the stream" (full replay). On reconnect the client
+    /// passes its last received stream id so it only replays the gap.
+    pub last_event_id: Option<String>,
 }
 
 impl Actor for WsSession {
@@ -61,14 +75,25 @@ impl Actor for WsSession {
         // Spawn the feed task — XREADs events:outgoing forever.
         let addr = ctx.address();
         let bus = self.bus.clone();
+        let initial_cursor = self.last_event_id.clone().unwrap_or_else(|| "0".into());
         actix::spawn(async move {
-            let mut last_id = "0".to_string();
+            let mut last_id = initial_cursor;
             loop {
                 match bus.read_events(&last_id, 5000).await {
                     Ok(events) => {
                         for (stream_id, env) in events {
-                            last_id = stream_id;
-                            if let Ok(s) = serde_json::to_string(&env) {
+                            last_id = stream_id.clone();
+                            // Build the forwarded JSON. We override the
+                            // envelope's `stream_id` field (which the producer
+                            // sets to "*" — a placeholder before XADD assigns
+                            // a real id) with the actual XREAD id so the
+                            // client can use it as a replay cursor.
+                            let outbound = serde_json::json!({
+                                "stream_id": stream_id,
+                                "symbol": env.symbol,
+                                "event": env.event,
+                            });
+                            if let Ok(s) = serde_json::to_string(&outbound) {
                                 let _ = addr.do_send(PushText(s));
                             }
                         }
@@ -223,6 +248,7 @@ pub async fn ws_handler(
         user_pubkey,
         subscriptions: HashSet::new(),
         last_ping: Instant::now(),
+        last_event_id: query.last_event_id.clone(),
     };
     ws::start(session, &req, stream).unwrap_or_else(|e| {
         tracing::error!("ws start: {e}");

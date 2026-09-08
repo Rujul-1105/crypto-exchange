@@ -11,7 +11,9 @@ use orderbook::{
     admin::{self, AdminState},
     bot::{spawn_bot, BotConfig},
     market::SymbolRegistry,
-    redis_bus::RedisBus,
+    redis_bus::{
+        new_event_cursor, RedisBus, DEFAULT_EVENTS_MAXLEN, DEFAULT_SETTLE_MAXLEN,
+    },
     redis_consumer::{spawn_consumer, spawn_settle_consumer},
     snapshot::{hydrate_registry, load_latest_snapshot, new_cursor, spawn_snapshot_task},
 };
@@ -36,6 +38,14 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10_000);
+    let events_maxlen: usize = std::env::var("REDIS_EVENTS_STREAM_MAXLEN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_EVENTS_MAXLEN);
+    let settle_maxlen: usize = std::env::var("REDIS_SETTLE_STREAM_MAXLEN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_SETTLE_MAXLEN);
     let demo_symbols: Vec<String> = std::env::var("DEMO_SYMBOLS")
         .unwrap_or_else(|_| DEFAULT_SYMBOL.into())
         .split(',')
@@ -43,34 +53,33 @@ async fn main() -> std::io::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // ── Redis bus ──
-    let bus = RedisBus::connect(&redis_url)
-        .await
-        .map_err(|e| std::io::Error::other(format!("redis connect: {e}")))?;
-
     // ── Symbol registry + hydrate from latest snapshot if present ──
     let registry = SymbolRegistry::new();
-    let initial_cursor = match load_latest_snapshot(&snapshot_dir).await {
+    let (initial_cursor, initial_event_cursor) = match load_latest_snapshot(&snapshot_dir).await {
         Ok(Some(state)) => {
             if let Err(e) = hydrate_registry(&registry, &state).await {
                 tracing::warn!("hydrate from snapshot failed: {e}");
-                "0".into()
+                ("0".into(), "0".into())
             } else {
                 tracing::info!(
-                    "hydrated {} engine(s) from snapshot; resuming from cursor {}",
+                    "hydrated {} engine(s) from snapshot; resuming orders from {}, events from {}",
                     state.engines.len(),
-                    state.last_consumed_order_redis_id
+                    state.last_consumed_order_redis_id,
+                    state.last_published_event_redis_id
                 );
-                state.last_consumed_order_redis_id
+                (
+                    state.last_consumed_order_redis_id,
+                    state.last_published_event_redis_id,
+                )
             }
         }
         Ok(None) => {
             tracing::info!("no snapshot found, starting fresh");
-            "0".into()
+            ("0".into(), "0".into())
         }
         Err(e) => {
             tracing::warn!("snapshot load failed: {e}");
-            "0".into()
+            ("0".into(), "0".into())
         }
     };
 
@@ -79,11 +88,24 @@ async fn main() -> std::io::Result<()> {
         let _ = registry.get_or_create(sym.clone()).await;
     }
 
-    // ── Shared cursor so the snapshot persists the live consumer position ──
+    // ── Shared cursors so the snapshot persists the live positions ──
     let cursor = new_cursor(initial_cursor.clone());
+    let event_cursor = new_event_cursor(initial_event_cursor.clone());
+
+    // ── Redis bus (takes ownership of the event cursor so publish_events
+    //    can mirror the live id into it) ──
+    let bus = RedisBus::connect(&redis_url, event_cursor.clone(), events_maxlen, settle_maxlen)
+        .await
+        .map_err(|e| std::io::Error::other(format!("redis connect: {e}")))?;
 
     // ── Spawn snapshot task ──
-    spawn_snapshot_task(registry.clone(), snapshot_dir, snapshot_interval_ms, cursor.clone());
+    spawn_snapshot_task(
+        registry.clone(),
+        snapshot_dir,
+        snapshot_interval_ms,
+        cursor.clone(),
+        event_cursor.clone(),
+    );
 
     // ── Spawn consumer (XREAD orders:incoming) ──
     spawn_consumer(registry.clone(), bus.clone(), initial_cursor, cursor.clone());

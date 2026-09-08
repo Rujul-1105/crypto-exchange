@@ -15,7 +15,7 @@ mod redis_bus;
 mod routes;
 mod ws;
 
-use redis_bus::RedisBus;
+use redis_bus::{RedisBus, DEFAULT_ORDERS_MAXLEN};
 use routes::UserOrdersIndex;
 
 #[actix_web::main]
@@ -38,8 +38,12 @@ async fn main() -> std::io::Result<()> {
         .collect();
     let jwt_secret = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "dev-only-secret-change-me-in-production".into());
+    let orders_maxlen: usize = std::env::var("REDIS_ORDERS_STREAM_MAXLEN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_ORDERS_MAXLEN);
 
-    let bus = RedisBus::connect(&redis_url)
+    let bus = RedisBus::connect(&redis_url, orders_maxlen)
         .await
         .map_err(|e| std::io::Error::other(format!("redis: {e}")))?;
     let user_orders: UserOrdersIndex = Arc::new(RwLock::new(HashMap::new()));
