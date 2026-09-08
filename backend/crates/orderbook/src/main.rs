@@ -95,7 +95,9 @@ async fn main() -> std::io::Result<()> {
     for sym in &demo_symbols {
         let cfg = BotConfig::from_env(sym.clone());
         let engine = registry.get_or_create(sym.clone()).await;
-        spawn_bot(engine, cfg);
+        // The bot publishes its own events (and a noise taker's) through the
+        // bus so WS subscribers see book + candle updates live.
+        spawn_bot(engine, cfg, bus.clone());
     }
 
     // ── Start actix-web admin ──
@@ -122,6 +124,10 @@ async fn main() -> std::io::Result<()> {
                 web::get().to(admin::orderbook_snapshot),
             )
             .route("/api/trades/{symbol}", web::get().to(admin::recent_trades))
+            .route(
+                "/api/candles/{symbol}/{interval}",
+                web::get().to(admin::candles),
+            )
     })
     .bind(&bind)?
     .run()

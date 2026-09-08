@@ -4,6 +4,8 @@
 //! - `GET /api/orderbook/:symbol` — depth snapshot
 //! - `GET /api/trades/:symbol` — recent trades (in-memory ring; persistence
 //!   via SQLite is added later)
+//! - `GET /api/candles/:symbol/:interval` — historical candles (closed
+//!   buckets + current open bucket)
 
 use actix_web::{web, HttpResponse, Responder};
 use common::*;
@@ -82,4 +84,41 @@ pub async fn recent_trades(
     let start = eng.recent_trades.len().saturating_sub(n);
     let trades: Vec<Trade> = eng.recent_trades.iter().skip(start).cloned().collect();
     HttpResponse::Ok().json(trades)
+}
+
+#[derive(Deserialize)]
+pub struct CandlesQuery {
+    #[serde(default = "default_candle_limit")]
+    pub limit: usize,
+}
+fn default_candle_limit() -> usize {
+    500
+}
+
+/// Historical candles for `(symbol, interval)` — the closed-bucket ring
+/// followed by the in-progress open bucket. Used by the chart's REST
+/// history hydration.
+pub async fn candles(
+    state: web::Data<AdminState>,
+    path: web::Path<(String, String)>,
+    query: web::Query<CandlesQuery>,
+) -> impl Responder {
+    let (symbol, interval_str) = path.into_inner();
+    let Some(interval) = CandleInterval::from_str(&interval_str) else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "bad_interval",
+            "interval": interval_str,
+        }));
+    };
+    let Some(engine) = state.registry.get(&symbol).await else {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": "unknown_symbol",
+            "symbol": symbol,
+        }));
+    };
+    let eng = engine.lock().await;
+    let all = eng.candle_aggregator.history_with_open(interval);
+    let n = query.limit.min(all.len());
+    let start = all.len().saturating_sub(n);
+    HttpResponse::Ok().json(&all[start..])
 }

@@ -443,12 +443,18 @@ impl MatchingEngine {
             self.push_recent_trade(trade.clone());
 
             self.book.last_trade_price = Some(fill_price);
-            let (candle, is_closed) = self.candle_aggregator.update(fill_price, fill_qty, now);
-            events.push(EngineEvent::CandleUpdate {
-                symbol: self.symbol.clone(),
-                candle,
-                is_closed,
-            });
+            // Emit a `CandleUpdate` for every tracked interval; the API WS
+            // relay routes each one to the matching `candles:<sym>:<interval>`
+            // channel by inspecting `candle.interval`.
+            for (_interval, candle, is_closed) in
+                self.candle_aggregator.update(fill_price, fill_qty, now)
+            {
+                events.push(EngineEvent::CandleUpdate {
+                    symbol: self.symbol.clone(),
+                    candle,
+                    is_closed,
+                });
+            }
             trade_occurred = true;
         }
 
