@@ -41,6 +41,16 @@ export function deriveUserAta(owner: PublicKey, mint: PublicKey): PublicKey {
   )[0];
 }
 
+/** Per-user ledger PDA seeded by `[b"user_balance", user]`. Holds the user's
+ *  available SOL and USDC balances after deposit / withdraw / settle_fill. */
+export function deriveUserBalancePda(programId: PublicKey, user: PublicKey): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("user_balance"), user.toBuffer()],
+    programId,
+  );
+  return pda;
+}
+
 /** Hook returning the Anchor Program (or null until the wallet + IDL are ready). */
 export function useExchangeProgram(): Program | null {
   const { connection } = useConnection();

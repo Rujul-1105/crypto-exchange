@@ -1,12 +1,18 @@
 "use client";
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+import {
+  createAssociatedTokenAccountInstruction,
+  createSyncNativeInstruction,
+  NATIVE_MINT,
+} from "@solana/spl-token";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowsLeftRight } from "@phosphor-icons/react";
 
-import { MINTS, deriveUserAta, deriveUserVaultAta, deriveVaultAuthorityPda, useExchangeProgram } from "@/lib/anchorClient";
+import { MINTS, deriveUserAta, deriveUserBalancePda, deriveUserVaultAta, deriveVaultAuthorityPda, useExchangeProgram } from "@/lib/anchorClient";
 
 type Mode = "deposit" | "withdraw";
 type Asset = "SOL" | "USDC";
@@ -29,6 +35,14 @@ function toBaseUnits(amount: string, decimals: number): bigint | null {
   } catch {
     return null;
   }
+}
+
+/** Wrap a BigInt as a BN for Anchor's borsh serializer. The u64 instruction
+ *  args go through `@coral-xyz/borsh`'s BNLayout.encode which calls
+ *  `src.toArrayLike(...)` — that method only exists on BN, not BigInt, so
+ *  passing a raw BigInt throws `src.toArrayLike is not a function`. */
+function toBN(baseUnits: bigint | null): BN | null {
+  return baseUnits === null ? null : new BN(baseUnits.toString());
 }
 
 export function DepositWithdraw() {
@@ -57,22 +71,62 @@ export function DepositWithdraw() {
       const userAta = deriveUserAta(publicKey, mint);
 
       const method = mode === "deposit"
-        ? asset === "SOL" ? program.methods.depositSol(baseUnits) : program.methods.depositUsdc(baseUnits)
-        : asset === "SOL" ? program.methods.withdrawSol(baseUnits) : program.methods.withdrawUsdc(baseUnits);
+        ? asset === "SOL" ? program.methods.depositSol(toBN(baseUnits)) : program.methods.depositUsdc(toBN(baseUnits))
+        : asset === "SOL" ? program.methods.withdrawSol(toBN(baseUnits)) : program.methods.withdrawUsdc(toBN(baseUnits));
 
       // For deposit, ensure the user has an ATA for the mint first.
       if (mode === "deposit") {
         const ataInfo = await connection.getAccountInfo(userAta);
         if (!ataInfo) {
-          const createAtaIx = (await import("@solana/spl-token")).createAssociatedTokenAccountInstruction(
+          const createAtaIx = createAssociatedTokenAccountInstruction(
             publicKey,
             userAta,
             publicKey,
             mint,
           );
-          const tx = new (await import("@solana/web3.js")).Transaction().add(createAtaIx);
+          const tx = new Transaction().add(createAtaIx);
           const sig = await sendTransaction(tx, connection);
           await connection.confirmTransaction(sig, "confirmed");
+        }
+
+        // For SOL deposits, wrap any deficit from native SOL into wSOL. The
+        // program expects wSOL (not native SOL) in the user's ATA; without
+        // this step the token::transfer CPI in deposit_sol fails with
+        // Token-program error 0x1 ("insufficient funds"). For USDC there's
+        // no native equivalent, so we assume the user already holds USDC.
+        if (asset === "SOL") {
+          const lamportsNeeded = Number(baseUnits);
+          const wsolAtaInfo = await connection.getAccountInfo(userAta);
+          let currentWsolLamports = 0;
+          if (wsolAtaInfo) {
+            const view = new DataView(
+              wsolAtaInfo.data.buffer,
+              wsolAtaInfo.data.byteOffset,
+              wsolAtaInfo.data.byteLength,
+            );
+            const low = view.getUint32(64, true);
+            const high = view.getUint32(68, true);
+            currentWsolLamports = low + high * 2 ** 32;
+          }
+          const deficit = lamportsNeeded - currentWsolLamports;
+          if (deficit > 0) {
+            // Wrap native SOL → wSOL by transferring lamports directly into
+            // the user's wSOL ATA, then calling sync_native to update the
+            // SPL token balance to match. The destination must be the wSOL
+            // ATA itself (not the wSOL mint) — sync_native reads that
+            // account's lamport balance. Two instructions in one tx.
+            const wrapTx = new Transaction()
+              .add(
+                SystemProgram.transfer({
+                  fromPubkey: publicKey,
+                  toPubkey: userAta,
+                  lamports: deficit,
+                }),
+              )
+              .add(createSyncNativeInstruction(userAta));
+            const wrapSig = await sendTransaction(wrapTx, connection);
+            await connection.confirmTransaction(wrapSig, "confirmed");
+          }
         }
       }
 
@@ -83,11 +137,11 @@ export function DepositWithdraw() {
           vaultAuthority,
           ...(mode === "deposit"
             ? asset === "SOL"
-              ? { sharedSolVault: userVault, userWsolAta: userAta, wsolMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
-              : { sharedUsdcVault: userVault, userUsdcAta: userAta, usdcMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
+              ? { userBalance: deriveUserBalancePda(programId, publicKey), sharedSolVault: userVault, userWsolAta: userAta, wsolMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
+              : { userBalance: deriveUserBalancePda(programId, publicKey), sharedUsdcVault: userVault, userUsdcAta: userAta, usdcMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
             : asset === "SOL"
-              ? { sharedSolVault: userVault, userWsolAta: userAta, wsolMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
-              : { sharedUsdcVault: userVault, userUsdcAta: userAta, usdcMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }),
+              ? { userBalance: deriveUserBalancePda(programId, publicKey), sharedSolVault: userVault, userWsolAta: userAta, wsolMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }
+              : { userBalance: deriveUserBalancePda(programId, publicKey), sharedUsdcVault: userVault, userUsdcAta: userAta, usdcMint: mint, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ATA_PROGRAM_ID, systemProgram: SYSTEM_PROGRAM_ID }),
         })
         .rpc();
 
@@ -216,4 +270,7 @@ function deriveConfigPda(programId: PublicKey): PublicKey {
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ATA_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111111111111");
+// System Program ID — 32 base58-encoded "1" characters (decodes to 32 zero
+// bytes). Earlier copies of this string in this file had 41+ characters,
+// which overflows the 32-byte buffer that PublicKey expects.
+const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111");

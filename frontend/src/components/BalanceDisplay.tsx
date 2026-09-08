@@ -2,10 +2,11 @@
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
 import { useQuery } from "@tanstack/react-query";
 import { Coin } from "@phosphor-icons/react";
 
-import { MINTS, deriveUserVaultAta, deriveVaultAuthorityPda, useExchangeProgram } from "@/lib/anchorClient";
+import { MINTS, deriveUserBalancePda, deriveUserVaultAta, deriveVaultAuthorityPda, useExchangeProgram } from "@/lib/anchorClient";
 import { truncateAddress, formatAmount } from "@/lib/format";
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
@@ -27,7 +28,7 @@ function useTokenBalances() {
   return useQuery({
     queryKey: ["balances", publicKey?.toBase58() ?? null],
     enabled: !!publicKey && !!program,
-    refetchInterval: 10_000,
+    refetchInterval: 5_000,
     queryFn: async (): Promise<TokenBalance[]> => {
       if (!publicKey || !program) throw new Error("not ready");
       const programId = program.programId;
@@ -36,26 +37,39 @@ function useTokenBalances() {
       const solVault = deriveUserVaultAta(vaultAuthority, MINTS.SOL);
       const usdcVault = deriveUserVaultAta(vaultAuthority, MINTS.USDC);
 
-      const [solInfo, usdcInfo] = await Promise.all([
-        connection.getAccountInfo(solVault),
-        connection.getAccountInfo(usdcVault),
-      ]);
-
-      const parseTokenAmount = (info: typeof solInfo): number => {
-        if (!info) return 0;
-        // SPL token account data layout: amount is u64 at offset 64.
-        const view = new DataView(info.data.buffer, info.data.byteOffset, info.data.byteLength);
-        const low = view.getUint32(64, true);
-        const high = view.getUint32(68, true);
-        return low + high * 2 ** 32;
-      };
-
-      const solAmount = parseTokenAmount(solInfo) / LAMPORTS_PER_SOL;
-      const usdcAmount = parseTokenAmount(usdcInfo) / 1_000_000;
+      // Source of truth: the user's `user_balance` PDA. The Anchor IDL
+      // exposes it as `program.account.userBalance`. Reading the shared
+      // vault ATAs directly (the previous implementation) showed every
+      // depositor's funds aggregated together — wrong for a single user.
+      // First-time users don't have the PDA yet, so we default to zero.
+      const userBalancePda = deriveUserBalancePda(programId, publicKey);
+      let solRaw = new BN(0);
+      let usdcRaw = new BN(0);
+      try {
+        const acct = await (program.account as any).userBalance.fetch(userBalancePda);
+        solRaw = new BN(acct.sol.toString());
+        usdcRaw = new BN(acct.usdc.toString());
+      } catch {
+        // PDA doesn't exist yet — user hasn't deposited. Leave at zero.
+      }
 
       return [
-        { symbol: "SOL" as const, mint: MINTS.SOL, vaultAta: solVault, decimals: 9, free: solAmount, locked: 0 },
-        { symbol: "USDC" as const, mint: MINTS.USDC, vaultAta: usdcVault, decimals: 6, free: usdcAmount, locked: 0 },
+        {
+          symbol: "SOL" as const,
+          mint: MINTS.SOL,
+          vaultAta: solVault,
+          decimals: 9,
+          free: solRaw.toNumber() / LAMPORTS_PER_SOL,
+          locked: 0,
+        },
+        {
+          symbol: "USDC" as const,
+          mint: MINTS.USDC,
+          vaultAta: usdcVault,
+          decimals: 6,
+          free: usdcRaw.toNumber() / 1_000_000,
+          locked: 0,
+        },
       ];
     },
   });
