@@ -56,7 +56,8 @@ export type Trade = {
   buy_order_id: number;
   sell_order_id: number;
   taker_side: Side;
-  ts: number;
+  /** Unix milliseconds — matches the `Timestamp` type on the backend. */
+  timestamp: number;
 };
 
 export type Candle = {

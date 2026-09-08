@@ -11,11 +11,14 @@ import { OrderForm } from "@/components/OrderForm";
 import { CandleChart } from "@/components/CandleChart";
 import { useMarketFeeds } from "@/hooks/useFeeds";
 import { useUiStore } from "@/stores/uiStore";
+import { MarketHeader } from "@/components/MarketHeader";
 
 export default function TradePage() {
   const params = useParams<{ symbol: string }>();
   const symbol = useUiStore((s) => s.symbol);
   const setSymbol = useUiStore((s) => s.setSymbol);
+  const interval = useUiStore((s) => s.interval);
+  const setInterval = useUiStore((s) => s.setInterval);
 
   useEffect(() => {
     if (params.symbol && params.symbol !== symbol) setSymbol(params.symbol);
@@ -40,7 +43,12 @@ export default function TradePage() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_320px] lg:grid-cols-[1fr_360px_300px]">
         <div className="space-y-4">
-          <CandleChart symbol={symbol} interval="1m" />
+          <MarketHeader symbol={symbol} />
+          <CandleChart
+            symbol={symbol}
+            interval={interval}
+            onIntervalChange={setInterval}
+          />
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Orderbook />
             <TradeTape />

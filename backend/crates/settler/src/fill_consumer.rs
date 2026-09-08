@@ -20,7 +20,10 @@ impl FillConsumer {
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut last_id = "0".to_string();
         loop {
-            let res: Vec<redis::streams::StreamRangeReply> = self
+            // Redis 0.27's XREAD parses into `StreamReadReply { keys }` —
+            // the older `Vec<StreamRangeReply>` silently fails on every
+            // response with "Response type not map compatible".
+            let res: redis::streams::StreamReadReply = self
                 .conn
                 .clone()
                 .xread_options(
@@ -31,8 +34,8 @@ impl FillConsumer {
                         .count(64),
                 )
                 .await?;
-            for range in res {
-                for entry in range.ids {
+            for stream_key in res.keys {
+                for entry in stream_key.ids {
                     last_id = entry.id.clone();
                     let Some(payload) = entry.map.get("data") else { continue };
                     let Ok(s) = redis::from_redis_value::<String>(payload) else { continue };

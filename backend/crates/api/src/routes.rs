@@ -110,7 +110,10 @@ pub async fn auth_nonce(
     let nonce = auth::new_nonce();
     let pubkey = body.pubkey.clone();
     let message = auth::nonce_message(&pubkey, &nonce);
-    state.nonce_store.put(pubkey.clone(), nonce.clone()).await;
+    // Store the full signed message (not just the nonce) so verify can
+    // recover the exact bytes the wallet signed. Reconstructing from a fresh
+    // nonce_message on verify produces a different timestamp → 401.
+    state.nonce_store.put(pubkey.clone(), message.clone()).await;
     HttpResponse::Ok().json(NonceResponse { nonce, message })
 }
 
@@ -118,14 +121,21 @@ pub async fn auth_verify(
     state: web::Data<ApiState>,
     body: web::Json<VerifyRequest>,
 ) -> impl Responder {
-    let stored = match state.nonce_store.take(&body.pubkey).await {
-        Some(n) if n == body.nonce => n,
-        _ => {
+    // Take returns the exact message bytes that were signed.
+    let message = match state.nonce_store.take(&body.pubkey).await {
+        Some(m) => m,
+        None => {
             return HttpResponse::Unauthorized()
                 .json(serde_json::json!({"error": "invalid_or_expired_nonce"}))
         }
     };
-    let message = auth::nonce_message(&body.pubkey, &stored);
+    // Confirm the nonce in the body matches the one embedded in the
+    // signed message — protects against a replay attempt where the body
+    // nonce was substituted with a different value.
+    if !message_contains_nonce(&message, &body.nonce) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"error": "invalid_or_expired_nonce"}));
+    }
     // Reject stale signed payloads so a captured nonce can't be replayed
     // beyond the freshness window.
     if !auth::verify_fresh(&message) {
@@ -159,6 +169,14 @@ pub async fn auth_verify(
         pubkey: body.pubkey.clone(),
         expires_at_unix_ms: exp * 1000,
     })
+}
+
+/// True if the stored signed message contains `Nonce: <body.nonce>` on its
+/// own line. Defends against a replay attack where the body nonce is
+/// substituted.
+fn message_contains_nonce(message: &str, nonce: &str) -> bool {
+    let needle = format!("\nNonce: {nonce}\n");
+    message.contains(&needle)
 }
 
 // ── Orders ──────────────────────────────────────────────────

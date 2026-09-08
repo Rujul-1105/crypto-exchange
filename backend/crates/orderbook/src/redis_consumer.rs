@@ -26,8 +26,10 @@ pub fn spawn_consumer(
         let mut last_id = last_consumed_id;
 
         loop {
-            // Block for new orders.
-            let res: Result<Vec<redis::streams::StreamRangeReply>, redis::RedisError> = conn
+            // Block for new orders. Redis 0.27's XREAD parses into
+            // `StreamReadReply { keys }` — `Vec<StreamRangeReply>` silently
+            // fails on every response with "Response type not map compatible".
+            let res: Result<redis::streams::StreamReadReply, redis::RedisError> = conn
                 .xread_options(
                     &[STREAM_ORDERS_INCOMING],
                     &[&last_id],
@@ -37,9 +39,9 @@ pub fn spawn_consumer(
                 )
                 .await;
             match res {
-                Ok(ranges) => {
-                    for range in ranges {
-                        for entry in range.ids {
+                Ok(reply) => {
+                    for stream_key in reply.keys {
+                        for entry in stream_key.ids {
                             last_id = entry.id.clone();
                             // Mirror the cursor into the shared handle so the
                             // snapshot task persists the live position.

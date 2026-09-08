@@ -4,13 +4,13 @@ import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type Trade } from "@/lib/api";
-import { useBookStore, type BookLevel } from "@/stores/bookStore";
+import { useBookStore } from "@/stores/bookStore";
 import { useTradeStore } from "@/stores/tradeStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 
 /** Subscribes to `book:<sym>` and `trades:<sym>` via WS, hydrates from REST. */
 export function useMarketFeeds(symbol: string) {
-  const wsBase = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/ws");
+  const wsBase = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/ws";
   const bookApplySnapshot = useBookStore((s) => s.applySnapshot);
   const bookApplyDelta = useBookStore((s) => s.applyDelta);
   const bookReset = useBookStore((s) => s.reset);
@@ -43,13 +43,15 @@ export function useMarketFeeds(symbol: string) {
   useEffect(() => {
     if (!tradesQuery.data) return;
     tradeClear();
+    // REST returns the newest trade last; reverse so we push oldest-first
+    // and the ring ends up newest-first.
     for (const t of [...tradesQuery.data].reverse()) {
       tradePush({
         id: t.id,
         price: t.price,
         qty: t.quantity,
         taker_side: t.taker_side,
-        ts: t.ts * 1000,
+        ts: t.timestamp,
       });
     }
   }, [tradesQuery.data, tradePush, tradeClear]);
@@ -59,11 +61,20 @@ export function useMarketFeeds(symbol: string) {
     const event = (msg as any).event;
     const channel = (msg as any).channel;
     if (!event || !channel) return;
+
     if (channel === `book:${symbol}`) {
-      if (event.type === "snapshot") {
-        bookApplySnapshot(event.bids as BookLevel[], event.asks as BookLevel[], event.last_trade_price ?? null);
-      } else if (event.type === "delta") {
-        bookApplyDelta(event.changes ?? []);
+      // Backend `EngineEvent` is `#[serde(tag="type", rename_all="snake_case")],
+      // so individual book changes arrive as `BookDelta` events (one per
+      // level change). Map each into the store's delta shape: a single
+      // `{side, price, qty}` change with `qty === "0"` meaning remove level.
+      if (event.type === "book_delta") {
+        bookApplyDelta([
+          {
+            side: event.side,
+            price: String(event.price),
+            qty: String(event.new_qty ?? "0"),
+          },
+        ]);
       }
     } else if (channel === `trades:${symbol}`) {
       if (event.type === "trade") {
@@ -73,7 +84,7 @@ export function useMarketFeeds(symbol: string) {
           price: t.price,
           qty: t.quantity,
           taker_side: t.taker_side,
-          ts: (t.ts ?? Date.now() / 1000) * 1000,
+          ts: t.timestamp ?? Date.now(),
         });
       }
     }

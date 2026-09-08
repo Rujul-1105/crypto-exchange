@@ -6,17 +6,26 @@ type Status = "connecting" | "open" | "closed";
 
 type ClientMsg = { op: "subscribe" | "unsubscribe" | "ping"; channel?: string; ts?: number };
 
-/** Reconnecting WS client with subscription tracking across reconnects. */
+/** Reconnecting WS client with subscription tracking + event-replay cursor. */
 export function useWebSocket(url: string, onMessage: (msg: unknown) => void) {
   const [status, setStatus] = useState<Status>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
   const onMessageRef = useRef(onMessage);
   const subsRef = useRef<Set<string>>(new Set());
   const pendingRef = useRef<Set<string>>(new Set());
+  const baseUrlRef = useRef(url);
+  // Last stream id the server told us about. The server includes
+  // `stream_id` on every forwarded event so we can use it as a replay
+  // cursor on reconnect — see `?last_event_id=...` in connect().
+  const lastEventIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
   }, [onMessage]);
+
+  useEffect(() => {
+    baseUrlRef.current = url;
+  }, [url]);
 
   const flushPending = useCallback(() => {
     const ws = wsRef.current;
@@ -29,7 +38,7 @@ export function useWebSocket(url: string, onMessage: (msg: unknown) => void) {
   }, []);
 
   useEffect(() => {
-    if (!url) return;
+    if (!baseUrlRef.current) return;
     let cancelled = false;
     let attempt = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -37,7 +46,15 @@ export function useWebSocket(url: string, onMessage: (msg: unknown) => void) {
     const connect = () => {
       if (cancelled) return;
       setStatus("connecting");
-      const ws = new WebSocket(url);
+      // Append `?last_event_id=<id>` on reconnect so the server replays
+      // events the client missed while disconnected. On the first connect
+      // `lastEventIdRef.current` is null and the server falls back to "0"
+      // (full replay from the start of the stream, bounded by XTRIM MAXLEN).
+      const base = baseUrlRef.current;
+      const tail = lastEventIdRef.current
+        ? `?last_event_id=${encodeURIComponent(lastEventIdRef.current)}`
+        : "";
+      const ws = new WebSocket(base + tail);
       wsRef.current = ws;
       ws.onopen = () => {
         if (cancelled) return;
@@ -54,7 +71,13 @@ export function useWebSocket(url: string, onMessage: (msg: unknown) => void) {
       ws.onmessage = (ev) => {
         if (cancelled) return;
         try {
-          onMessageRef.current(JSON.parse(ev.data));
+          const parsed = JSON.parse(ev.data);
+          // Record the server-assigned stream id so the next reconnect
+          // can request events from this point forward.
+          if (parsed && typeof parsed === "object" && typeof parsed.stream_id === "string") {
+            lastEventIdRef.current = parsed.stream_id;
+          }
+          onMessageRef.current(parsed);
         } catch (e) {
           console.warn("ws: bad json", e);
         }

@@ -23,12 +23,25 @@ const INTERVAL_OPTIONS: { value: Interval; label: string }[] = [
   { value: "1h", label: "1h" },
 ];
 
-export function CandleChart({ symbol, interval }: { symbol: string; interval: Interval }) {
+// Module-scope sentinel — keeps the selector stable when `byInterval[interval]`
+// is `undefined` (before any data has loaded). A new `[]` from `?? []` on each
+// render would re-trigger the chart-rendering effect on every store update.
+const EMPTY_CANDLES: Candle[] = [];
+
+export function CandleChart({
+  symbol,
+  interval,
+  onIntervalChange,
+}: {
+  symbol: string;
+  interval: Interval;
+  onIntervalChange?: (i: Interval) => void;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const candles = useCandleStore((s) => s.byInterval[interval] ?? []);
+  const candles = useCandleStore((s) => s.byInterval[interval] ?? EMPTY_CANDLES);
   const updateCandle = useCandleStore((s) => s.update);
   const setSeries = useCandleStore((s) => s.setSeries);
 
@@ -128,7 +141,9 @@ export function CandleChart({ symbol, interval }: { symbol: string; interval: In
     const event = (msg as any).event;
     const channel = (msg as any).channel;
     if (!event || !channel) return;
-    if (channel === `candles:${symbol}:${interval}` && event.type === "candle") {
+    // Backend `EngineEvent` is `#[serde(tag="type", rename_all="snake_case")],
+    // so per-trade candle updates arrive as `candle_update` events.
+    if (channel === `candles:${symbol}:${interval}` && event.type === "candle_update") {
       const raw = event.candle;
       const candle: Candle = {
         time: Math.floor(raw.open_ts / 1000),
@@ -154,11 +169,7 @@ export function CandleChart({ symbol, interval }: { symbol: string; interval: In
           {INTERVAL_OPTIONS.map((opt) => (
             <button
               key={opt.value}
-              onClick={() => {
-                /* interval is controlled by the parent; we render all three
-                   options to indicate availability, but for Phase 9 we keep a
-                   single interval. A future enhancement can swap live. */
-              }}
+              onClick={() => onIntervalChange?.(opt.value)}
               className={`rounded-full px-3 py-1 font-mono transition ${
                 opt.value === interval
                   ? "bg-bg-surface text-text-primary"
